@@ -3,6 +3,8 @@ import asyncio
 import logging
 import json
 from datetime import datetime
+from collections import defaultdict
+import time
 import aiohttp
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -103,6 +105,29 @@ ROLES = {
 
 user_sessions: dict[int, dict] = {}
 
+SPAM_LIMIT = 5
+SPAM_WINDOW = 10
+SPAM_COOLDOWN = 30
+
+user_message_times: dict[int, list] = defaultdict(list)
+user_spam_warned: dict[int, float] = {}
+
+
+def is_spam(user_id: int) -> bool:
+    now = time.time()
+    times = user_message_times[user_id]
+    times = [t for t in times if now - t < SPAM_WINDOW]
+    user_message_times[user_id] = times
+    times.append(now)
+    return len(times) > SPAM_LIMIT
+
+
+def in_cooldown(user_id: int) -> bool:
+    warned_at = user_spam_warned.get(user_id)
+    if warned_at and time.time() - warned_at < SPAM_COOLDOWN:
+        return True
+    return False
+
 
 def get_session(user_id: int) -> dict:
     if user_id not in user_sessions:
@@ -136,7 +161,7 @@ MODEL_STYLES = {
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
     buttons = []
     for key, model in MODELS.items():
-        check = "✅ " if key == current else ""
+        check = f"{pe('5370893703575511656', '✅')} " if key == current else ""
         style = MODEL_STYLES[key]
         btn = InlineKeyboardButton(
             text=f"{check}{model['name']}",
@@ -152,7 +177,7 @@ def models_keyboard(current: str) -> InlineKeyboardMarkup:
 def roles_keyboard(current: str) -> InlineKeyboardMarkup:
     buttons = []
     for key, role in ROLES.items():
-        check = "✅ " if key == current else ""
+        check = f"{pe('5370893703575511656', '✅')} " if key == current else ""
         btn = InlineKeyboardButton(
             text=f"{check}{role['name']}",
             callback_data=f"role:{key}",
@@ -373,6 +398,18 @@ def escape_md(text: str) -> str:
 @router.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
+
+    if in_cooldown(user_id):
+        return
+    if is_spam(user_id):
+        user_spam_warned[user_id] = time.time()
+        remaining = SPAM_COOLDOWN
+        await message.answer(
+            f"⏱ <b>Слишком много запросов.</b>\n\nПодожди <b>{remaining} сек.</b> перед следующим сообщением.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     text = message.text.strip()
     session = get_session(user_id)
     model = MODELS[session["model"]]
