@@ -113,20 +113,22 @@ user_message_times: dict[int, list] = defaultdict(list)
 user_spam_warned: dict[int, float] = {}
 
 
-def is_spam(user_id: int) -> bool:
+def check_and_record(user_id: int) -> bool:
     now = time.time()
     times = user_message_times[user_id]
     times = [t for t in times if now - t < SPAM_WINDOW]
     user_message_times[user_id] = times
     times.append(now)
-    return len(times) > SPAM_LIMIT
+    return len(times) >= SPAM_LIMIT
 
 
-def in_cooldown(user_id: int) -> bool:
+def cooldown_remaining(user_id: int) -> int:
     warned_at = user_spam_warned.get(user_id)
-    if warned_at and time.time() - warned_at < SPAM_COOLDOWN:
-        return True
-    return False
+    if warned_at:
+        elapsed = time.time() - warned_at
+        if elapsed < SPAM_COOLDOWN:
+            return int(SPAM_COOLDOWN - elapsed)
+    return 0
 
 
 def get_session(user_id: int) -> dict:
@@ -161,7 +163,7 @@ MODEL_STYLES = {
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
     buttons = []
     for key, model in MODELS.items():
-        check = f"{pe('5370893703575511656', '✅')} " if key == current else ""
+        check = "✅ " if key == current else ""
         style = MODEL_STYLES[key]
         btn = InlineKeyboardButton(
             text=f"{check}{model['name']}",
@@ -177,7 +179,7 @@ def models_keyboard(current: str) -> InlineKeyboardMarkup:
 def roles_keyboard(current: str) -> InlineKeyboardMarkup:
     buttons = []
     for key, role in ROLES.items():
-        check = f"{pe('5370893703575511656', '✅')} " if key == current else ""
+        check = "✅ " if key == current else ""
         btn = InlineKeyboardButton(
             text=f"{check}{role['name']}",
             callback_data=f"role:{key}",
@@ -399,13 +401,17 @@ def escape_md(text: str) -> str:
 async def handle_message(message: Message):
     user_id = message.from_user.id
 
-    if in_cooldown(user_id):
-        return
-    if is_spam(user_id):
-        user_spam_warned[user_id] = time.time()
-        remaining = SPAM_COOLDOWN
+    remaining = cooldown_remaining(user_id)
+    if remaining > 0:
         await message.answer(
-            f"⏱ <b>Слишком много запросов.</b>\n\nПодожди <b>{remaining} сек.</b> перед следующим сообщением.",
+            f"⏱ <b>Подожди ещё {remaining} сек.</b> перед следующим сообщением.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    if check_and_record(user_id):
+        user_spam_warned[user_id] = time.time()
+        await message.answer(
+            f"🚫 <b>Слишком много сообщений!</b>\n\nНе спамь — подожди <b>{SPAM_COOLDOWN} сек.</b>",
             parse_mode=ParseMode.HTML
         )
         return
