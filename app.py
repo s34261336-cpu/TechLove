@@ -7,15 +7,17 @@ from collections import defaultdict
 import time
 import aiohttp
 
+from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    BotCommand, ReplyKeyboardMarkup, KeyboardButton,
+    BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject,
 )
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -113,22 +115,58 @@ user_message_times: dict[int, list] = defaultdict(list)
 user_spam_warned: dict[int, float] = {}
 
 
-def check_and_record(user_id: int) -> bool:
-    now = time.time()
-    times = user_message_times[user_id]
-    times = [t for t in times if now - t < SPAM_WINDOW]
-    user_message_times[user_id] = times
-    times.append(now)
-    return len(times) >= SPAM_LIMIT
+class AntiSpamMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        if isinstance(event, Message):
+            user_id = event.from_user.id
+        elif isinstance(event, CallbackQuery):
+            user_id = event.from_user.id
+        else:
+            return await handler(event, data)
 
+        now = time.time()
 
-def cooldown_remaining(user_id: int) -> int:
-    warned_at = user_spam_warned.get(user_id)
-    if warned_at:
-        elapsed = time.time() - warned_at
-        if elapsed < SPAM_COOLDOWN:
-            return int(SPAM_COOLDOWN - elapsed)
-    return 0
+        warned_at = user_spam_warned.get(user_id)
+        if warned_at:
+            remaining = int(SPAM_COOLDOWN - (now - warned_at))
+            if remaining > 0:
+                if isinstance(event, Message):
+                    await event.answer(
+                        f"⏱ <b>Подожди ещё {remaining} сек.</b>",
+                        parse_mode=ParseMode.HTML,
+                    )
+                elif isinstance(event, CallbackQuery):
+                    await event.answer(f"⏱ Подожди ещё {remaining} сек.", show_alert=True)
+                return
+            else:
+                del user_spam_warned[user_id]
+
+        times = user_message_times[user_id]
+        times = [t for t in times if now - t < SPAM_WINDOW]
+        times.append(now)
+        user_message_times[user_id] = times
+
+        if len(times) >= SPAM_LIMIT:
+            user_spam_warned[user_id] = now
+            user_message_times[user_id] = []
+            if isinstance(event, Message):
+                await event.answer(
+                    f"🚫 <b>Слишком много запросов!</b>\n\nНе спамь — подожди <b>{SPAM_COOLDOWN} сек.</b>",
+                    parse_mode=ParseMode.HTML,
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer(
+                    f"🚫 Слишком много запросов! Подожди {SPAM_COOLDOWN} сек.",
+                    show_alert=True,
+                )
+            return
+
+        return await handler(event, data)
 
 
 def get_session(user_id: int) -> dict:
@@ -401,21 +439,6 @@ def escape_md(text: str) -> str:
 async def handle_message(message: Message):
     user_id = message.from_user.id
 
-    remaining = cooldown_remaining(user_id)
-    if remaining > 0:
-        await message.answer(
-            f"⏱ <b>Подожди ещё {remaining} сек.</b> перед следующим сообщением.",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    if check_and_record(user_id):
-        user_spam_warned[user_id] = time.time()
-        await message.answer(
-            f"🚫 <b>Слишком много сообщений!</b>\n\nНе спамь — подожди <b>{SPAM_COOLDOWN} сек.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
     text = message.text.strip()
     session = get_session(user_id)
     model = MODELS[session["model"]]
@@ -463,6 +486,8 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware(AntiSpamMiddleware())
+    dp.callback_query.middleware(AntiSpamMiddleware())
     dp.include_router(router)
 
     try:
