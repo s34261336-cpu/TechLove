@@ -44,9 +44,9 @@ def pe(emoji_id: str, fallback: str) -> str:
 
 MODELS = {
     "llama4_scout": {
-        "name": "Llama 4 Scout",
-        "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
-        "description": "Новейшая Llama 4 от Meta. Умная, быстрая, бесплатная.",
+        "name": "GPT-OSS 120B",
+        "model_id": "openai/gpt-oss-120b",
+        "description": "Мощная 120B модель с открытыми весами от OpenAI. Топовое качество ответов.",
         "emoji": "🦙",
         "emoji_html": pe("5926783847453692661", "🦙"),
         "emoji_id": "5926783847453692661",
@@ -68,9 +68,9 @@ MODELS = {
         "emoji_id": "5323761960829862762",
     },
     "qwen3_32b": {
-        "name": "Qwen3 32B",
-        "model_id": "qwen/qwen3-32b",
-        "description": "Флагманская модель Alibaba. Глубокое мышление и высокое качество.",
+        "name": "Groq Compound Mini",
+        "model_id": "groq/compound-mini",
+        "description": "Компактная составная модель Groq. Быстрая и умная — лучший баланс скорости и качества.",
         "emoji": "🌀",
         "emoji_html": pe("5388957777676745182", "🌀"),
         "emoji_id": "5388957777676745182",
@@ -1218,6 +1218,9 @@ async def call_groq(session: dict, user_message: str) -> str:
     async with aiohttp.ClientSession() as http:
         async with http.post(GROQ_API_URL, json=payload, headers=headers) as resp:
             data = await resp.json()
+    if "choices" not in data:
+        error_msg = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
+        raise ValueError(error_msg)
     reply = data["choices"][0]["message"]["content"]
     session["history"].append({"role": "assistant", "content": reply})
     return reply
