@@ -398,7 +398,7 @@ def models_keyboard(current: str) -> InlineKeyboardMarkup:
         btn = InlineKeyboardButton(
             text=f"{check}{model['name']}",
             callback_data=f"model:{key}",
-            icon_custom_emoji_id=model["emoji_id"],
+            icon_custom_emoji_id=get_model_emoji_id(key),
         )
         if style:
             btn.style = style
