@@ -31,6 +31,7 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
+MODELS_FILE = "models_data.json"
 
 
 # ─── Premium emoji helper ─────────────────────────────────────────────────────
@@ -203,6 +204,52 @@ def get_all_users() -> list:
     return list(data.values())
 
 
+# ─── Model restrictions storage ───────────────────────────────────────────────
+
+def load_restrictions() -> dict:
+    if os.path.exists(MODELS_FILE):
+        try:
+            with open(MODELS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_restrictions(data: dict):
+    with open(MODELS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def get_model_restriction(model_key: str) -> dict | None:
+    """Returns restriction dict if model is currently restricted, else None."""
+    data = load_restrictions()
+    r = data.get(model_key)
+    if not r:
+        return None
+    if r.get("type") == "temporary" and r.get("until"):
+        if time.time() > r["until"]:
+            # expired — auto-lift
+            data.pop(model_key, None)
+            save_restrictions(data)
+            return None
+    return r
+
+def restrict_model(model_key: str, reason: str, until_ts: float | None = None):
+    data = load_restrictions()
+    data[model_key] = {
+        "restricted": True,
+        "type": "temporary" if until_ts else "permanent",
+        "reason": reason,
+        "until": until_ts,
+        "restricted_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+    }
+    save_restrictions(data)
+
+def unrestrict_model(model_key: str):
+    data = load_restrictions()
+    data.pop(model_key, None)
+    save_restrictions(data)
+
+
 # ─── Sessions ─────────────────────────────────────────────────────────────────
 
 user_sessions: dict[int, dict] = {}
@@ -221,6 +268,9 @@ class AdminStates(StatesGroup):
     waiting_broadcast = State()
     waiting_give_user = State()
     waiting_give_amount = State()
+    waiting_restrict_reason = State()
+    waiting_temp_duration = State()
+    waiting_temp_reason = State()
 
 
 # ─── Anti-spam middleware ─────────────────────────────────────────────────────
@@ -369,7 +419,39 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin:users")],
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
+        [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
     ])
+
+
+def admin_models_keyboard() -> InlineKeyboardMarkup:
+    """List of all models with restriction status indicator."""
+    buttons = []
+    for key, model in MODELS.items():
+        r = get_model_restriction(key)
+        if r:
+            if r["type"] == "temporary":
+                status = "⏳"
+            else:
+                status = "🔴"
+        else:
+            status = "🟢"
+        buttons.append([InlineKeyboardButton(
+            text=f"{status} {model['name']}",
+            callback_data=f"mctrl:info:{key}",
+        )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def model_actions_keyboard(model_key: str) -> InlineKeyboardMarkup:
+    r = get_model_restriction(model_key)
+    rows = []
+    if r:
+        rows.append([InlineKeyboardButton(text="✅ Возобновить", callback_data=f"mctrl:resume:{model_key}")])
+    rows.append([InlineKeyboardButton(text="🔴 Ограничить", callback_data=f"mctrl:restrict:{model_key}")])
+    rows.append([InlineKeyboardButton(text="⏳ Временно ограничить", callback_data=f"mctrl:temp:{model_key}")])
+    rows.append([InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_cancel_keyboard() -> InlineKeyboardMarkup:
@@ -669,6 +751,195 @@ async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменено")
 
 
+# ─── Admin: Model management ─────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:models")
+async def cb_admin_models(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "🤖 <b>Управление моделями</b>\n\n"
+        "🟢 — доступна  |  🔴 — отключена  |  ⏳ — временно отключена\n\n"
+        "Выберите модель для управления:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_models_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mctrl:info:"))
+async def cb_mctrl_info(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    model_key = callback.data.split(":", 2)[2]
+    model = MODELS[model_key]
+    r = get_model_restriction(model_key)
+    if r:
+        if r["type"] == "temporary":
+            until_str = datetime.fromtimestamp(r["until"]).strftime("%d.%m.%Y %H:%M")
+            status_text = (
+                f"⏳ <b>Временно ограничена</b>\n"
+                f"До: <b>{until_str}</b>\n"
+                f"Причина: <i>{r['reason']}</i>\n"
+                f"Ограничена с: {r['restricted_at']}"
+            )
+        else:
+            status_text = (
+                f"🔴 <b>Ограничена</b>\n"
+                f"Причина: <i>{r['reason']}</i>\n"
+                f"Ограничена с: {r['restricted_at']}"
+            )
+    else:
+        status_text = "🟢 <b>Доступна</b>"
+
+    text = (
+        f"{model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"{status_text}\n\n"
+        f"Выберите действие:"
+    )
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=model_actions_keyboard(model_key))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mctrl:resume:"))
+async def cb_mctrl_resume(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    model_key = callback.data.split(":", 2)[2]
+    model = MODELS[model_key]
+    unrestrict_model(model_key)
+    await callback.message.edit_text(
+        f"✅ <b>Модель возобновлена!</b>\n\n"
+        f"{model['emoji_html']} <b>{model['name']}</b> снова доступна для всех пользователей.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")]
+        ])
+    )
+    await callback.answer("✅ Возобновлена")
+
+
+@router.callback_query(F.data.startswith("mctrl:restrict:"))
+async def cb_mctrl_restrict(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    model_key = callback.data.split(":", 2)[2]
+    model = MODELS[model_key]
+    await state.set_state(AdminStates.waiting_restrict_reason)
+    await state.update_data(restrict_model_key=model_key)
+    await callback.message.edit_text(
+        f"🔴 <b>Ограничение модели</b>\n\n"
+        f"Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"Введите причину ограничения (будет показана пользователям):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mctrl:temp:"))
+async def cb_mctrl_temp(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    model_key = callback.data.split(":", 2)[2]
+    model = MODELS[model_key]
+    await state.set_state(AdminStates.waiting_temp_duration)
+    await state.update_data(restrict_model_key=model_key)
+    await callback.message.edit_text(
+        f"⏳ <b>Временное ограничение</b>\n\n"
+        f"Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"Введите длительность ограничения в часах (например: 2, 24, 0.5):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+# ─── FSM: Restrict model (permanent) ─────────────────────────────────────────
+
+@router.message(AdminStates.waiting_restrict_reason)
+async def fsm_restrict_reason(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    model_key = data["restrict_model_key"]
+    model = MODELS[model_key]
+    reason = message.text.strip()
+    restrict_model(model_key, reason)
+    await state.clear()
+    await message.answer(
+        f"🔴 <b>Модель ограничена!</b>\n\n"
+        f"{model['emoji_html']} <b>{model['name']}</b>\n"
+        f"Причина: <i>{reason}</i>\n\n"
+        f"Пользователи увидят это сообщение при попытке использования.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")]
+        ])
+    )
+
+
+# ─── FSM: Restrict model (temporary) — step 1: duration ──────────────────────
+
+@router.message(AdminStates.waiting_temp_duration)
+async def fsm_temp_duration(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        hours = float(message.text.strip())
+        if hours <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Введите положительное число (например: 1, 2.5, 24)",
+            reply_markup=admin_cancel_keyboard()
+        )
+        return
+    await state.set_state(AdminStates.waiting_temp_reason)
+    await state.update_data(restrict_hours=hours)
+    data = await state.get_data()
+    model = MODELS[data["restrict_model_key"]]
+    await message.answer(
+        f"⏳ Длительность: <b>{hours} ч.</b>\n\n"
+        f"Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"Теперь введите причину (будет показана пользователям):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+
+
+# ─── FSM: Restrict model (temporary) — step 2: reason ────────────────────────
+
+@router.message(AdminStates.waiting_temp_reason)
+async def fsm_temp_reason(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    model_key = data["restrict_model_key"]
+    hours = data["restrict_hours"]
+    model = MODELS[model_key]
+    reason = message.text.strip()
+    until_ts = time.time() + hours * 3600
+    restrict_model(model_key, reason, until_ts=until_ts)
+    await state.clear()
+    until_str = datetime.fromtimestamp(until_ts).strftime("%d.%m.%Y %H:%M")
+    await message.answer(
+        f"⏳ <b>Модель временно ограничена!</b>\n\n"
+        f"{model['emoji_html']} <b>{model['name']}</b>\n"
+        f"До: <b>{until_str}</b>\n"
+        f"Причина: <i>{reason}</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")]
+        ])
+    )
+
+
 # ─── FSM: Broadcast ───────────────────────────────────────────────────────────
 
 @router.message(AdminStates.waiting_broadcast)
@@ -852,9 +1123,25 @@ async def fsm_give_amount(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("model:"))
 async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
+    model = MODELS[model_key]
+
+    # Check if model is restricted (admin can always select any model)
+    if callback.from_user.id != ADMIN_ID:
+        r = get_model_restriction(model_key)
+        if r:
+            if r["type"] == "temporary":
+                until_str = datetime.fromtimestamp(r["until"]).strftime("%d.%m.%Y %H:%M")
+                notice = f"⏳ Временно недоступна до <b>{until_str}</b>"
+            else:
+                notice = "🔴 Модель недоступна"
+            await callback.answer(
+                f"❌ {model['name']} недоступна\n\nПричина: {r['reason']}",
+                show_alert=True
+            )
+            return
+
     session = get_session(callback.from_user.id)
     session["model"] = model_key
-    model = MODELS[model_key]
     await callback.message.edit_text(
         f"{pe('5370893703575511656', '✅')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n<i>{model['description']}</i>",
         parse_mode=ParseMode.HTML,
@@ -956,6 +1243,24 @@ async def handle_message(message: Message):
     session = get_session(user_id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
+
+    # Block if current model is restricted (admin is exempt)
+    if message.from_user.id != ADMIN_ID:
+        r = get_model_restriction(session["model"])
+        if r:
+            if r["type"] == "temporary":
+                until_str = datetime.fromtimestamp(r["until"]).strftime("%d.%m.%Y %H:%M")
+                time_note = f"⏳ Временно недоступна до <b>{until_str}</b>"
+            else:
+                time_note = "🔴 Модель недоступна"
+            await message.answer(
+                f"⚠️ <b>{model['name']}</b> сейчас недоступна.\n\n"
+                f"{time_note}\n"
+                f"📌 Причина: <i>{r['reason']}</i>\n\n"
+                f"Выберите другую модель через кнопку 🤖 Модель.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
 
     thinking_msg = await message.answer(
         f"⏳ <i>{model['emoji_html']} {model['name']} думает...</i>",
