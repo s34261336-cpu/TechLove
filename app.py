@@ -391,7 +391,7 @@ MODEL_STYLES = {
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
-    buttons = []
+    all_btns = []
     for key, model in MODELS.items():
         check = "✅ " if key == current else ""
         style = MODEL_STYLES[key]
@@ -402,7 +402,9 @@ def models_keyboard(current: str) -> InlineKeyboardMarkup:
         )
         if style:
             btn.style = style
-        buttons.append([btn])
+        all_btns.append(btn)
+    # 2 buttons per row
+    buttons = [all_btns[i:i+2] for i in range(0, len(all_btns), 2)]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
