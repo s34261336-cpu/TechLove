@@ -1324,7 +1324,11 @@ async def handle_message(message: Message):
 
         chunks = [reply[i:i + 4096] for i in range(0, len(reply), 4096)]
         for chunk in chunks:
-            await message.answer(chunk, parse_mode=ParseMode.MARKDOWN)
+            try:
+                await message.answer(chunk, parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                # Fallback: send as plain text if Markdown parsing fails
+                await message.answer(chunk)
 
     except Exception as e:
         logger.error(f"Groq error for user {user_id}: {e}")
