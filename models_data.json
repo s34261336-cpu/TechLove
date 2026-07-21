@@ -1,9 +1,9 @@
 {
-  "llama3_70b": {
+  "llama3_8b": {
     "restricted": true,
     "type": "permanent",
     "reason": "Хз",
     "until": null,
-    "restricted_at": "21.07.2026 06:17"
+    "restricted_at": "21.07.2026 06:24"
   }
 }
