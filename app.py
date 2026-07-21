@@ -808,18 +808,22 @@ async def cb_mctrl_resume(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
-    model_key = callback.data.split(":", 2)[2]
-    model = MODELS[model_key]
-    unrestrict_model(model_key)
-    await callback.message.edit_text(
-        f"✅ <b>Модель возобновлена!</b>\n\n"
-        f"{model['emoji_html']} <b>{model['name']}</b> снова доступна для всех пользователей.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")]
-        ])
-    )
-    await callback.answer("✅ Возобновлена")
+    await callback.answer()
+    try:
+        model_key = callback.data.split(":", 2)[2]
+        model = MODELS[model_key]
+        unrestrict_model(model_key)
+        await callback.message.edit_text(
+            f"✅ <b>Модель возобновлена!</b>\n\n"
+            f"<b>{model['name']}</b> снова доступна для всех пользователей.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")]
+            ])
+        )
+    except Exception as e:
+        logger.error(f"mctrl:resume error: {e}")
+        await callback.message.answer(f"❌ Ошибка: {e}", parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data.startswith("mctrl:restrict:"))
@@ -827,18 +831,23 @@ async def cb_mctrl_restrict(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
-    model_key = callback.data.split(":", 2)[2]
-    model = MODELS[model_key]
-    await state.set_state(AdminStates.waiting_restrict_reason)
-    await state.update_data(restrict_model_key=model_key)
-    await callback.message.edit_text(
-        f"🔴 <b>Ограничение модели</b>\n\n"
-        f"Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
-        f"Введите причину ограничения (будет показана пользователям):",
-        parse_mode=ParseMode.HTML,
-        reply_markup=admin_cancel_keyboard()
-    )
     await callback.answer()
+    try:
+        model_key = callback.data.split(":", 2)[2]
+        model = MODELS[model_key]
+        await state.set_state(AdminStates.waiting_restrict_reason)
+        await state.update_data(restrict_model_key=model_key)
+        await callback.message.edit_text(
+            f"🔴 <b>Ограничение модели</b>\n\n"
+            f"Модель: <b>{model['name']}</b>\n\n"
+            f"Введите причину ограничения (будет показана пользователям):",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_cancel_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"mctrl:restrict error: {e}")
+        await state.clear()
+        await callback.message.answer(f"❌ Ошибка: {e}", parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data.startswith("mctrl:temp:"))
@@ -846,18 +855,23 @@ async def cb_mctrl_temp(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
-    model_key = callback.data.split(":", 2)[2]
-    model = MODELS[model_key]
-    await state.set_state(AdminStates.waiting_temp_duration)
-    await state.update_data(restrict_model_key=model_key)
-    await callback.message.edit_text(
-        f"⏳ <b>Временное ограничение</b>\n\n"
-        f"Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
-        f"Введите длительность ограничения в часах (например: 2, 24, 0.5):",
-        parse_mode=ParseMode.HTML,
-        reply_markup=admin_cancel_keyboard()
-    )
     await callback.answer()
+    try:
+        model_key = callback.data.split(":", 2)[2]
+        model = MODELS[model_key]
+        await state.set_state(AdminStates.waiting_temp_duration)
+        await state.update_data(restrict_model_key=model_key)
+        await callback.message.edit_text(
+            f"⏳ <b>Временное ограничение</b>\n\n"
+            f"Модель: <b>{model['name']}</b>\n\n"
+            f"Введите длительность в часах (например: 2, 24, 0.5):",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_cancel_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"mctrl:temp error: {e}")
+        await state.clear()
+        await callback.message.answer(f"❌ Ошибка: {e}", parse_mode=ParseMode.HTML)
 
 
 # ─── FSM: Restrict model (permanent) ─────────────────────────────────────────
@@ -874,9 +888,9 @@ async def fsm_restrict_reason(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"🔴 <b>Модель ограничена!</b>\n\n"
-        f"{model['emoji_html']} <b>{model['name']}</b>\n"
+        f"<b>{model['name']}</b>\n"
         f"Причина: <i>{reason}</i>\n\n"
-        f"Пользователи увидят это сообщение при попытке использования.",
+        f"Пользователи увидят это при попытке использования.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")]
@@ -906,7 +920,7 @@ async def fsm_temp_duration(message: Message, state: FSMContext):
     model = MODELS[data["restrict_model_key"]]
     await message.answer(
         f"⏳ Длительность: <b>{hours} ч.</b>\n\n"
-        f"Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"Модель: <b>{model['name']}</b>\n\n"
         f"Теперь введите причину (будет показана пользователям):",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
@@ -930,7 +944,7 @@ async def fsm_temp_reason(message: Message, state: FSMContext):
     until_str = datetime.fromtimestamp(until_ts).strftime("%d.%m.%Y %H:%M")
     await message.answer(
         f"⏳ <b>Модель временно ограничена!</b>\n\n"
-        f"{model['emoji_html']} <b>{model['name']}</b>\n"
+        f"<b>{model['name']}</b>\n"
         f"До: <b>{until_str}</b>\n"
         f"Причина: <i>{reason}</i>",
         parse_mode=ParseMode.HTML,
