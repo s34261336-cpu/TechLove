@@ -40,6 +40,26 @@ def pe(emoji_id: str, fallback: str) -> str:
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 
+# Emoji IDs shown on model buttons depending on restriction state
+EMOJI_RESTRICTED_PERM = "5278578973595427038"
+EMOJI_RESTRICTED_TEMP = "5276240711795107620"
+
+
+def get_model_emoji_id(model_key: str) -> str:
+    """Return the emoji_id to display for a model based on its restriction state."""
+    r = get_model_restriction(model_key)
+    if r:
+        if r["type"] == "temporary":
+            return EMOJI_RESTRICTED_TEMP
+        return EMOJI_RESTRICTED_PERM
+    return MODELS[model_key]["emoji_id"]
+
+
+def is_admin(user_id: int) -> bool:
+    """Return True if user has admin privileges (not in test mode)."""
+    return user_id == ADMIN_ID and not admin_test_mode
+
+
 # ─── Models & Roles ──────────────────────────────────────────────────────────
 
 MODELS = {
@@ -254,6 +274,8 @@ def unrestrict_model(model_key: str):
 
 user_sessions: dict[int, dict] = {}
 
+admin_test_mode: bool = False  # When True, admin is treated as a regular user
+
 SPAM_LIMIT = 5
 SPAM_WINDOW = 10
 SPAM_COOLDOWN = 30
@@ -289,8 +311,8 @@ class AntiSpamMiddleware(BaseMiddleware):
         else:
             return await handler(event, data)
 
-        # admin bypasses spam
-        if user_id == ADMIN_ID:
+        # admin bypasses spam (unless in test mode)
+        if is_admin(user_id):
             return await handler(event, data)
 
         now = time.time()
@@ -413,6 +435,7 @@ def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def admin_keyboard() -> InlineKeyboardMarkup:
+    test_label = "🧪 Тест как пользователь: 🟢 ВКЛ" if admin_test_mode else "🧪 Тест как пользователь: ⭕ ВЫКЛ"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🪙 Выдать ZenoToken", callback_data="admin:give")],
@@ -420,11 +443,12 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin:users")],
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
         [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
+        [InlineKeyboardButton(text=test_label, callback_data="admin:testmode")],
     ])
 
 
 def admin_models_keyboard() -> InlineKeyboardMarkup:
-    """List of all models with restriction status indicator."""
+    """List of all models with restriction status indicator and matching emoji."""
     buttons = []
     for key, model in MODELS.items():
         r = get_model_restriction(key)
@@ -438,6 +462,7 @@ def admin_models_keyboard() -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(
             text=f"{status} {model['name']}",
             callback_data=f"mctrl:info:{key}",
+            icon_custom_emoji_id=get_model_emoji_id(key),
         )])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -606,18 +631,22 @@ async def cmd_profile(message: Message):
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 
+def admin_panel_text() -> str:
+    users = get_all_users()
+    test_note = "\n⚠️ <b>Режим теста активен</b> — вы как обычный пользователь." if admin_test_mode else ""
+    return (
+        f"🛡 <b>Админ панель</b>\n\n"
+        f"👥 Пользователей в базе: <b>{len(users)}</b>{test_note}\n\n"
+        f"Выберите действие:"
+    )
+
+
 @router.message(F.text == "🛡 Админ панель")
 async def cmd_admin(message: Message):
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
-    users = get_all_users()
-    text = (
-        f"🛡 <b>Админ панель</b>\n\n"
-        f"👥 Пользователей в базе: <b>{len(users)}</b>\n\n"
-        f"Выберите действие:"
-    )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    await message.answer(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
 
 
 @router.callback_query(F.data == "admin:broadcast")
@@ -725,13 +754,7 @@ async def cb_admin_back(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer()
         return
-    users = get_all_users()
-    text = (
-        f"🛡 <b>Админ панель</b>\n\n"
-        f"👥 Пользователей в базе: <b>{len(users)}</b>\n\n"
-        f"Выберите действие:"
-    )
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    await callback.message.edit_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
     await callback.answer()
 
 
@@ -741,14 +764,20 @@ async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     await state.clear()
-    users = get_all_users()
-    text = (
-        f"🛡 <b>Админ панель</b>\n\n"
-        f"👥 Пользователей в базе: <b>{len(users)}</b>\n\n"
-        f"Выберите действие:"
-    )
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    await callback.message.edit_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
     await callback.answer("Отменено")
+
+
+@router.callback_query(F.data == "admin:testmode")
+async def cb_admin_testmode(callback: CallbackQuery):
+    global admin_test_mode
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    admin_test_mode = not admin_test_mode
+    status = "🟢 включён" if admin_test_mode else "⭕ выключен"
+    await callback.message.edit_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    await callback.answer(f"Режим теста {status}", show_alert=True)
 
 
 # ─── Admin: Model management ─────────────────────────────────────────────────
@@ -1139,8 +1168,8 @@ async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
     model = MODELS[model_key]
 
-    # Check if model is restricted (admin can always select any model)
-    if callback.from_user.id != ADMIN_ID:
+    # Check if model is restricted (admin can always select any model, unless in test mode)
+    if not is_admin(callback.from_user.id):
         r = get_model_restriction(model_key)
         if r:
             if r["type"] == "temporary":
@@ -1261,8 +1290,8 @@ async def handle_message(message: Message):
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
 
-    # Block if current model is restricted (admin is exempt)
-    if message.from_user.id != ADMIN_ID:
+    # Block if current model is restricted (admin is exempt, unless in test mode)
+    if not is_admin(message.from_user.id):
         r = get_model_restriction(session["model"])
         if r:
             if r["type"] == "temporary":
