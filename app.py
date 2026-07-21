@@ -15,6 +15,8 @@ from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject,
 )
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
@@ -27,8 +29,17 @@ GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+ADMIN_ID = 5814345235
+USERS_FILE = "users_data.json"
+
+
+# ─── Premium emoji helper ─────────────────────────────────────────────────────
+
 def pe(emoji_id: str, fallback: str) -> str:
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+# ─── Models & Roles ──────────────────────────────────────────────────────────
 
 MODELS = {
     "llama4_scout": {
@@ -105,6 +116,95 @@ ROLES = {
     "tutor":      {"name": "Преподаватель","emoji": "🎓",  "emoji_html": pe("5206402318769076760", "🎓"),  "emoji_id": "5206402318769076760"},
 }
 
+
+# ─── User data (profiles + Zenotoken) ────────────────────────────────────────
+
+def load_users() -> dict:
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_users(data: dict):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def get_user_profile(user_id: int, first_name: str = "", username: str = "") -> dict:
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        data[uid] = {
+            "user_id": user_id,
+            "first_name": first_name,
+            "username": username,
+            "zenotoken": 0,
+            "joined_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "last_seen": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "messages_count": 0,
+        }
+        save_users(data)
+    else:
+        # update name fields if provided
+        changed = False
+        if first_name and data[uid]["first_name"] != first_name:
+            data[uid]["first_name"] = first_name
+            changed = True
+        if username and data[uid]["username"] != username:
+            data[uid]["username"] = username
+            changed = True
+        if changed:
+            save_users(data)
+    return data[uid]
+
+def update_user_field(user_id: int, field: str, value):
+    data = load_users()
+    uid = str(user_id)
+    if uid in data:
+        data[uid][field] = value
+        save_users(data)
+
+def touch_user(user_id: int, first_name: str = "", username: str = ""):
+    """Register/update user and increment message count."""
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        data[uid] = {
+            "user_id": user_id,
+            "first_name": first_name or "",
+            "username": username or "",
+            "zenotoken": 0,
+            "joined_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "last_seen": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "messages_count": 1,
+        }
+    else:
+        data[uid]["last_seen"] = datetime.now().strftime("%d.%m.%Y %H:%M")
+        data[uid]["messages_count"] = data[uid].get("messages_count", 0) + 1
+        if first_name:
+            data[uid]["first_name"] = first_name
+        if username:
+            data[uid]["username"] = username
+    save_users(data)
+
+def give_tokens(user_id: int, amount: int) -> int:
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return -1  # user not found
+    data[uid]["zenotoken"] = data[uid].get("zenotoken", 0) + amount
+    save_users(data)
+    return data[uid]["zenotoken"]
+
+def get_all_users() -> list:
+    data = load_users()
+    return list(data.values())
+
+
+# ─── Sessions ─────────────────────────────────────────────────────────────────
+
 user_sessions: dict[int, dict] = {}
 
 SPAM_LIMIT = 5
@@ -114,6 +214,16 @@ SPAM_COOLDOWN = 30
 user_message_times: dict[int, list] = defaultdict(list)
 user_spam_warned: dict[int, float] = {}
 
+
+# ─── FSM States ──────────────────────────────────────────────────────────────
+
+class AdminStates(StatesGroup):
+    waiting_broadcast = State()
+    waiting_give_user = State()
+    waiting_give_amount = State()
+
+
+# ─── Anti-spam middleware ─────────────────────────────────────────────────────
 
 class AntiSpamMiddleware(BaseMiddleware):
     async def __call__(
@@ -127,6 +237,10 @@ class AntiSpamMiddleware(BaseMiddleware):
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id
         else:
+            return await handler(event, data)
+
+        # admin bypasses spam
+        if user_id == ADMIN_ID:
             return await handler(event, data)
 
         now = time.time()
@@ -169,6 +283,8 @@ class AntiSpamMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+# ─── Session helper ───────────────────────────────────────────────────────────
+
 def get_session(user_id: int) -> dict:
     if user_id not in user_sessions:
         user_sessions[user_id] = {
@@ -180,12 +296,16 @@ def get_session(user_id: int) -> dict:
     return user_sessions[user_id]
 
 
-def main_keyboard() -> ReplyKeyboardMarkup:
+# ─── Keyboards ───────────────────────────────────────────────────────────────
+
+def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="🤖 Модель"), KeyboardButton(text="🎭 Роль")],
         [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
-        [KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Помощь")],
     ]
+    if user_id == ADMIN_ID:
+        buttons.append([KeyboardButton(text="🛡 Админ панель")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -242,12 +362,33 @@ def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text="🪙 Выдать ZenoToken", callback_data="admin:give")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
+        [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin:users")],
+        [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
+    ])
+
+
+def admin_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")]
+    ])
+
+
+# ─── Router ───────────────────────────────────────────────────────────────────
+
 router = Router()
 
+
+# ─── /start ───────────────────────────────────────────────────────────────────
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user = message.from_user
+    touch_user(user.id, user.first_name, user.username or "")
     session = get_session(user.id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
@@ -259,8 +400,10 @@ async def cmd_start(message: Message):
         f"• Роль: {role['emoji_html']} {role['name']}\n\n"
         f"Просто напиши мне сообщение — и я отвечу!"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard(user.id))
 
+
+# ─── /help ────────────────────────────────────────────────────────────────────
 
 @router.message(Command("help"))
 @router.message(F.text == "ℹ️ Помощь")
@@ -277,17 +420,21 @@ async def cmd_help(message: Message):
         f"{pe('5258093637450866522', '🤖')} <b>Модели (все бесплатные):</b>\n{models_text}\n\n"
         f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
-        "🗑 <b>Новый диалог</b> — сбросить историю\n\n"
+        "🗑 <b>Новый диалог</b> — сбросить историю\n"
+        "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n\n"
         "📝 <b>Команды:</b>\n"
         "/start — главное меню\n"
         "/new — новый диалог\n"
         "/model — сменить модель\n"
         "/role — сменить роль\n"
         "/status — текущие настройки\n"
+        "/profile — мой профиль\n"
         "/help — помощь"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard(message.from_user.id))
 
+
+# ─── /model ───────────────────────────────────────────────────────────────────
 
 @router.message(Command("model"))
 @router.message(F.text == "🤖 Модель")
@@ -300,6 +447,8 @@ async def cmd_model(message: Message):
     )
 
 
+# ─── /role ────────────────────────────────────────────────────────────────────
+
 @router.message(Command("role"))
 @router.message(F.text == "🎭 Роль")
 async def cmd_role(message: Message):
@@ -311,6 +460,8 @@ async def cmd_role(message: Message):
     )
 
 
+# ─── /new ─────────────────────────────────────────────────────────────────────
+
 @router.message(Command("new"))
 @router.message(F.text == "🗑 Новый диалог")
 async def cmd_new(message: Message):
@@ -319,9 +470,11 @@ async def cmd_new(message: Message):
     await message.answer(
         "🗑 <b>История очищена.</b> Начинаем новый диалог!",
         parse_mode=ParseMode.HTML,
-        reply_markup=main_keyboard()
+        reply_markup=main_keyboard(message.from_user.id)
     )
 
+
+# ─── /status ──────────────────────────────────────────────────────────────────
 
 @router.message(Command("status"))
 @router.message(F.text == "⚙️ Настройки")
@@ -342,6 +495,360 @@ async def cmd_status(message: Message):
         reply_markup=settings_keyboard(message.from_user.id)
     )
 
+
+# ─── /profile ─────────────────────────────────────────────────────────────────
+
+@router.message(Command("profile"))
+@router.message(F.text == "👤 Профиль")
+async def cmd_profile(message: Message):
+    user = message.from_user
+    profile = get_user_profile(user.id, user.first_name, user.username or "")
+    username_str = f"@{profile['username']}" if profile.get("username") else "—"
+    session = get_session(user.id)
+    model = MODELS[session["model"]]
+    role = ROLES[session["role"]]
+    text = (
+        f"👤 <b>Профиль</b>\n\n"
+        f"👤 Имя: <b>{profile['first_name']}</b>\n"
+        f"🔗 Username: <b>{username_str}</b>\n"
+        f"🆔 ID: <code>{profile['user_id']}</code>\n\n"
+        f"🪙 <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n\n"
+        f"💬 Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
+        f"📅 Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
+        f"🕐 Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
+        f"🤖 Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
+        f"🎭 Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
+    )
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+
+# ─── Admin panel ──────────────────────────────────────────────────────────────
+
+@router.message(Command("admin"))
+@router.message(F.text == "🛡 Админ панель")
+async def cmd_admin(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+    users = get_all_users()
+    text = (
+        f"🛡 <b>Админ панель</b>\n\n"
+        f"👥 Пользователей в базе: <b>{len(users)}</b>\n\n"
+        f"Выберите действие:"
+    )
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+
+
+@router.callback_query(F.data == "admin:broadcast")
+async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_broadcast)
+    await callback.message.edit_text(
+        "📢 <b>Рассылка</b>\n\nНапишите сообщение для рассылки всем пользователям.\n"
+        "Поддерживается HTML-форматирование.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:give")
+async def cb_admin_give(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_give_user)
+    await callback.message.edit_text(
+        "🪙 <b>Выдача ZenoToken</b>\n\nВведите ID пользователя или @username:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:stats")
+async def cb_admin_stats(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    users = get_all_users()
+    total_tokens = sum(u.get("zenotoken", 0) for u in users)
+    total_msgs = sum(u.get("messages_count", 0) for u in users)
+    top_users = sorted(users, key=lambda u: u.get("zenotoken", 0), reverse=True)[:5]
+    top_text = "\n".join(
+        f"{i+1}. <b>{u['first_name']}</b> — 🪙 {u.get('zenotoken', 0)}"
+        for i, u in enumerate(top_users)
+    )
+    text = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"👥 Всего пользователей: <b>{len(users)}</b>\n"
+        f"💬 Всего сообщений: <b>{total_msgs}</b>\n"
+        f"🪙 Всего ZenoToken выдано: <b>{total_tokens}</b>\n\n"
+        f"🏆 <b>Топ по ZenoToken:</b>\n{top_text or '—'}"
+    )
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")]
+    ])
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:users")
+async def cb_admin_users(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    users = get_all_users()
+    if not users:
+        await callback.answer("Пользователей нет", show_alert=True)
+        return
+    # Show last 20 by last_seen
+    recent = sorted(users, key=lambda u: u.get("last_seen", ""), reverse=True)[:20]
+    lines = []
+    for u in recent:
+        uname = f"@{u['username']}" if u.get("username") else f"id{u['user_id']}"
+        lines.append(
+            f"• <b>{u['first_name']}</b> ({uname})\n"
+            f"  🪙 {u.get('zenotoken', 0)} | 💬 {u.get('messages_count', 0)} | 🕐 {u.get('last_seen', '—')}"
+        )
+    text = f"👥 <b>Последние {len(recent)} пользователей:</b>\n\n" + "\n\n".join(lines)
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")]
+    ])
+    # Telegram message limit
+    if len(text) > 4000:
+        text = text[:4000] + "\n\n<i>...список обрезан</i>"
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:find")
+async def cb_admin_find(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_give_user)
+    await state.update_data(find_only=True)
+    await callback.message.edit_text(
+        "🔍 <b>Поиск пользователя</b>\n\nВведите ID или @username:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:back")
+async def cb_admin_back(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer()
+        return
+    users = get_all_users()
+    text = (
+        f"🛡 <b>Админ панель</b>\n\n"
+        f"👥 Пользователей в базе: <b>{len(users)}</b>\n\n"
+        f"Выберите действие:"
+    )
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:cancel")
+async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer()
+        return
+    await state.clear()
+    users = get_all_users()
+    text = (
+        f"🛡 <b>Админ панель</b>\n\n"
+        f"👥 Пользователей в базе: <b>{len(users)}</b>\n\n"
+        f"Выберите действие:"
+    )
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    await callback.answer("Отменено")
+
+
+# ─── FSM: Broadcast ───────────────────────────────────────────────────────────
+
+@router.message(AdminStates.waiting_broadcast)
+async def fsm_broadcast_text(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    broadcast_text = message.text or message.caption or ""
+    users = get_all_users()
+    sent = 0
+    failed = 0
+    status_msg = await message.answer(
+        f"📢 Начинаю рассылку для <b>{len(users)}</b> пользователей...",
+        parse_mode=ParseMode.HTML
+    )
+    for user in users:
+        try:
+            await bot.send_message(
+                chat_id=user["user_id"],
+                text=f"📢 <b>Сообщение от администратора:</b>\n\n{broadcast_text}",
+                parse_mode=ParseMode.HTML
+            )
+            sent += 1
+            await asyncio.sleep(0.05)  # avoid flood
+        except Exception:
+            failed += 1
+    await status_msg.edit_text(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📤 Отправлено: <b>{sent}</b>\n"
+        f"❌ Не доставлено: <b>{failed}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")]
+        ])
+    )
+
+
+# ─── FSM: Give tokens — step 1 (user lookup) ─────────────────────────────────
+
+@router.message(AdminStates.waiting_give_user)
+async def fsm_give_user(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    query = message.text.strip().lstrip("@")
+    data = await state.get_data()
+    find_only = data.get("find_only", False)
+
+    users = load_users()
+    found = None
+    # Try by numeric ID first
+    if query.isdigit():
+        uid = query
+        if uid in users:
+            found = users[uid]
+    else:
+        # Search by username (case-insensitive)
+        for u in users.values():
+            if u.get("username", "").lower() == query.lower():
+                found = u
+                break
+
+    if not found:
+        await message.answer(
+            f"❌ Пользователь <code>{query}</code> не найден в базе.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_cancel_keyboard()
+        )
+        return
+
+    if find_only:
+        await state.clear()
+        uname = f"@{found['username']}" if found.get("username") else "—"
+        text = (
+            f"🔍 <b>Профиль пользователя</b>\n\n"
+            f"👤 Имя: <b>{found['first_name']}</b>\n"
+            f"🔗 Username: <b>{uname}</b>\n"
+            f"🆔 ID: <code>{found['user_id']}</code>\n"
+            f"🪙 ZenoToken: <b>{found.get('zenotoken', 0)}</b>\n"
+            f"💬 Сообщений: <b>{found.get('messages_count', 0)}</b>\n"
+            f"📅 Регистрация: <b>{found.get('joined_at', '—')}</b>\n"
+            f"🕐 Последняя активность: <b>{found.get('last_seen', '—')}</b>"
+        )
+        give_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🪙 Выдать токены", callback_data=f"admin:give_to:{found['user_id']}")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
+        ])
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=give_kb)
+        return
+
+    await state.set_state(AdminStates.waiting_give_amount)
+    await state.update_data(target_user_id=found["user_id"], target_name=found["first_name"])
+    await message.answer(
+        f"🪙 Выдача токенов для <b>{found['first_name']}</b> (текущий баланс: {found.get('zenotoken', 0)})\n\n"
+        f"Введите количество ZenoToken (можно отрицательное для снятия):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+
+
+# Quick give from find profile
+@router.callback_query(F.data.startswith("admin:give_to:"))
+async def cb_give_to(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    uid = int(callback.data.split(":")[2])
+    users = load_users()
+    found = users.get(str(uid))
+    if not found:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_give_amount)
+    await state.update_data(target_user_id=uid, target_name=found["first_name"])
+    await callback.message.edit_text(
+        f"🪙 Выдача токенов для <b>{found['first_name']}</b> (баланс: {found.get('zenotoken', 0)})\n\n"
+        f"Введите количество ZenoToken:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+# ─── FSM: Give tokens — step 2 (amount) ─────────────────────────────────────
+
+@router.message(AdminStates.waiting_give_amount)
+async def fsm_give_amount(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    target_id = data["target_user_id"]
+    target_name = data["target_name"]
+
+    try:
+        amount = int(message.text.strip())
+    except ValueError:
+        await message.answer(
+            "❌ Введите целое число (например: 100 или -50)",
+            reply_markup=admin_cancel_keyboard()
+        )
+        return
+
+    new_balance = give_tokens(target_id, amount)
+    if new_balance == -1:
+        await message.answer("❌ Пользователь не найден в базе.")
+        await state.clear()
+        return
+
+    await state.clear()
+
+    # Notify target user
+    try:
+        sign = "+" if amount >= 0 else ""
+        await bot.send_message(
+            chat_id=target_id,
+            text=(
+                f"🪙 <b>Вам начислены ZenoToken!</b>\n\n"
+                f"{sign}{amount} ZenoToken\n"
+                f"Новый баланс: <b>{new_balance} ZenoToken</b>"
+            ),
+            parse_mode=ParseMode.HTML
+        )
+        notified = "✅ Пользователь уведомлён."
+    except Exception:
+        notified = "⚠️ Не удалось уведомить пользователя."
+
+    await message.answer(
+        f"🪙 <b>Готово!</b>\n\n"
+        f"Пользователь: <b>{target_name}</b>\n"
+        f"Начислено: <b>{'+' if amount >= 0 else ''}{amount}</b> ZenoToken\n"
+        f"Новый баланс: <b>{new_balance}</b> ZenoToken\n\n"
+        f"{notified}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")]
+        ])
+    )
+
+
+# ─── Callbacks: model / role / temp / settings ───────────────────────────────
 
 @router.callback_query(F.data.startswith("model:"))
 async def cb_model(callback: CallbackQuery):
@@ -395,6 +902,8 @@ async def cb_noop(callback: CallbackQuery):
     await callback.answer()
 
 
+# ─── Groq API ─────────────────────────────────────────────────────────────────
+
 async def call_groq(session: dict, user_message: str) -> str:
     model_id = MODELS[session["model"]]["model_id"]
     today = datetime.now().strftime("%d.%m.%Y")
@@ -435,11 +944,16 @@ def escape_md(text: str) -> str:
     return text
 
 
+# ─── Message handler ──────────────────────────────────────────────────────────
+
 @router.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
-
     text = message.text.strip()
+
+    # Track user activity
+    touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
+
     session = get_session(user_id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
@@ -469,16 +983,22 @@ async def handle_message(message: Message):
         )
 
 
+# ─── Bot commands ─────────────────────────────────────────────────────────────
+
 async def set_commands(bot: Bot):
     await bot.set_my_commands([
-        BotCommand(command="start",  description="Главное меню"),
-        BotCommand(command="new",    description="Новый диалог"),
-        BotCommand(command="model",  description="Выбрать модель ИИ"),
-        BotCommand(command="role",   description="Выбрать роль ассистента"),
-        BotCommand(command="status", description="Текущие настройки"),
-        BotCommand(command="help",   description="Помощь"),
+        BotCommand(command="start",   description="Главное меню"),
+        BotCommand(command="new",     description="Новый диалог"),
+        BotCommand(command="model",   description="Выбрать модель ИИ"),
+        BotCommand(command="role",    description="Выбрать роль ассистента"),
+        BotCommand(command="status",  description="Текущие настройки"),
+        BotCommand(command="profile", description="Мой профиль и ZenoToken"),
+        BotCommand(command="help",    description="Помощь"),
+        BotCommand(command="admin",   description="Админ панель"),
     ])
 
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 async def main():
     bot = Bot(
