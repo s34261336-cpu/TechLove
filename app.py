@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import logging
 import json
@@ -1267,6 +1268,8 @@ async def call_groq(session: dict, user_message: str) -> str:
         error_msg = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
         raise ValueError(error_msg)
     reply = data["choices"][0]["message"]["content"]
+    # Strip chain-of-thought thinking blocks (Qwen3, Groq Compound, etc.)
+    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
     session["history"].append({"role": "assistant", "content": reply})
     return reply
 
