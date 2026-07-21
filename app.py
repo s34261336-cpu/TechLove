@@ -524,7 +524,6 @@ async def cmd_profile(message: Message):
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 
-@router.message(Command("admin"))
 @router.message(F.text == "🛡 Админ панель")
 async def cmd_admin(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -994,7 +993,6 @@ async def set_commands(bot: Bot):
         BotCommand(command="status",  description="Текущие настройки"),
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
         BotCommand(command="help",    description="Помощь"),
-        BotCommand(command="admin",   description="Админ панель"),
     ])
 
 
