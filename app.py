@@ -14,7 +14,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject,
+    BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject, FSInputFile,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -502,7 +502,7 @@ async def cmd_start(message: Message):
     session = get_session(user.id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
-    text = (
+    caption = (
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
         f"Я — ИИ-ассистент с доступом к лучшим <b>бесплатным</b> языковым моделям (Groq).\n\n"
         f"📌 <b>Текущие настройки:</b>\n"
@@ -510,7 +510,8 @@ async def cmd_start(message: Message):
         f"• Роль: {role['emoji_html']} {role['name']}\n\n"
         f"Просто напиши мне сообщение — и я отвечу!"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard(user.id))
+    photo = FSInputFile("welcome_photo.jpg")
+    await message.answer_photo(photo, caption=caption, parse_mode=ParseMode.HTML, reply_markup=main_keyboard(user.id))
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
