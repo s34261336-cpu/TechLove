@@ -69,6 +69,7 @@ MODELS = {
     "llama4_scout": {
         "name": "GPT-OSS 120B",
         "model_id": "openai/gpt-oss-120b",
+        "provider": "openrouter",
         "description": "Мощная 120B модель с открытыми весами от OpenAI. Топовое качество ответов.",
         "emoji": "🦙",
         "emoji_html": pe("5926783847453692661", "🦙"),
@@ -93,6 +94,7 @@ MODELS = {
     "qwen3_32b": {
         "name": "Groq Compound Mini",
         "model_id": "groq/compound-mini",
+        "provider": "openrouter",
         "description": "Компактная составная модель Groq. Быстрая и умная — лучший баланс скорости и качества.",
         "emoji": "🌀",
         "emoji_html": pe("5388957777676745182", "🌀"),
@@ -101,6 +103,7 @@ MODELS = {
     "qwen3_27b": {
         "name": "Qwen3.6 27B",
         "model_id": "qwen/qwen3.6-27b",
+        "provider": "openrouter",
         "description": "Новейшая Qwen3.6. Отличный баланс скорости и интеллекта.",
         "emoji": "🔮",
         "emoji_html": pe("5776233299424843260", "🔮"),
@@ -109,6 +112,7 @@ MODELS = {
     "compound": {
         "name": "Groq Compound",
         "model_id": "groq/compound",
+        "provider": "openrouter",
         "description": "Составная модель от Groq. Объединяет несколько ИИ для лучшего результата.",
         "emoji": "⚗️",
         "emoji_html": pe("5913787972200698358", "⚗️"),
