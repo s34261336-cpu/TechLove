@@ -93,8 +93,7 @@ MODELS = {
     },
     "qwen3_32b": {
         "name": "Groq Compound Mini",
-        "model_id": "groq/compound-mini",
-        "provider": "openrouter",
+        "model_id": "compound-beta-mini",
         "description": "Компактная составная модель Groq. Быстрая и умная — лучший баланс скорости и качества.",
         "emoji": "🌀",
         "emoji_html": pe("5388957777676745182", "🌀"),
@@ -111,8 +110,7 @@ MODELS = {
     },
     "compound": {
         "name": "Groq Compound",
-        "model_id": "groq/compound",
-        "provider": "openrouter",
+        "model_id": "compound-beta",
         "description": "Составная модель от Groq. Объединяет несколько ИИ для лучшего результата.",
         "emoji": "⚗️",
         "emoji_html": pe("5913787972200698358", "⚗️"),
