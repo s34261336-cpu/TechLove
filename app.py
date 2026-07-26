@@ -1262,7 +1262,7 @@ async def cb_style_menu(callback: CallbackQuery):
         f"{s['emoji']} <b>{s['name']}</b> — {s['description']}"
         for s in STYLES.values()
     )
-    await callback.message.edit_text(
+    await callback.message.answer(
         f"🗣 <b>Стиль общения нейросети</b>\n\n"
         f"Выбери, как именно ИИ будет с тобой общаться:\n\n"
         f"{styles_text}\n\n"
