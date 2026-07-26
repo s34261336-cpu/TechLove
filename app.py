@@ -321,6 +321,37 @@ user_sessions: dict[int, dict] = {}
 
 admin_test_mode: bool = False  # When True, admin is treated as a regular user
 
+# ─── Maintenance mode ─────────────────────────────────────────────────────────
+maintenance: dict = {"active": False, "until_ts": None, "reason": ""}
+
+def is_maintenance() -> bool:
+    """Returns True if maintenance mode is currently active."""
+    if not maintenance["active"]:
+        return False
+    if maintenance["until_ts"] and time.time() > maintenance["until_ts"]:
+        maintenance["active"] = False
+        maintenance["until_ts"] = None
+        maintenance["reason"] = ""
+        return False
+    return True
+
+def maintenance_text() -> str:
+    until_ts = maintenance.get("until_ts")
+    reason = maintenance.get("reason", "")
+    if until_ts:
+        until_str = datetime.fromtimestamp(until_ts).strftime("%d.%m.%Y в %H:%M")
+        time_line = f"⏱ Ориентировочное время окончания: <b>{until_str}</b>"
+    else:
+        time_line = "⏱ Время окончания пока неизвестно."
+    reason_line = f"📌 Причина: <i>{reason}</i>" if reason else ""
+    return (
+        f"🔧 <b>Бот на технических работах</b>\n\n"
+        f"Мы уже всё чиним — скоро вернёмся!\n\n"
+        f"{time_line}\n"
+        f"{reason_line}\n\n"
+        f"Приносим извинения за неудобства 🙏"
+    )
+
 SPAM_LIMIT = 5
 SPAM_WINDOW = 10
 SPAM_COOLDOWN = 30
@@ -345,6 +376,8 @@ class AdminStates(StatesGroup):
     waiting_restrict_reason = State()
     waiting_temp_duration = State()
     waiting_temp_reason = State()
+    waiting_maintenance_duration = State()
+    waiting_maintenance_reason = State()
 
 
 # ─── Anti-spam middleware ─────────────────────────────────────────────────────
@@ -363,9 +396,17 @@ class AntiSpamMiddleware(BaseMiddleware):
         else:
             return await handler(event, data)
 
-        # admin bypasses spam (unless in test mode)
+        # admin bypasses all restrictions
         if is_admin(user_id):
             return await handler(event, data)
+
+        # maintenance mode — block everyone except admin
+        if is_maintenance():
+            if isinstance(event, Message):
+                await event.answer(maintenance_text(), parse_mode=ParseMode.HTML)
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🔧 Бот на технических работах. Подождите!", show_alert=True)
+            return
 
         now = time.time()
 
@@ -495,6 +536,7 @@ def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def admin_keyboard() -> InlineKeyboardMarkup:
     test_label = "🧪 Тест как пользователь: 🟢 ВКЛ" if admin_test_mode else "🧪 Тест как пользователь: ⭕ ВЫКЛ"
+    maint_label = "🔧 Тех. работы: 🟢 ВКЛ" if is_maintenance() else "🔧 Тех. работы: ⭕ ВЫКЛ"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🪙 Выдать ZenoToken", callback_data="admin:give")],
@@ -503,6 +545,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
         [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
         [InlineKeyboardButton(text=test_label, callback_data="admin:testmode")],
+        [InlineKeyboardButton(text=maint_label, callback_data="admin:maintenance")],
     ])
 
 
@@ -867,6 +910,95 @@ async def cb_admin_testmode(callback: CallbackQuery):
     status = "🟢 включён" if admin_test_mode else "⭕ выключен"
     await callback.message.edit_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
     await callback.answer(f"Режим теста {status}", show_alert=True)
+
+
+# ─── Admin: Maintenance mode ──────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:maintenance")
+async def cb_admin_maintenance(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    # If already active — offer to turn off
+    if is_maintenance():
+        maintenance["active"] = False
+        maintenance["until_ts"] = None
+        maintenance["reason"] = ""
+        await callback.message.edit_text(
+            admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard()
+        )
+        await callback.answer("✅ Тех. работы завершены. Бот снова доступен!", show_alert=True)
+        return
+    # Start setup flow: ask duration
+    await state.set_state(AdminStates.waiting_maintenance_duration)
+    await callback.message.edit_text(
+        "🔧 <b>Технические работы</b>\n\n"
+        "Введите продолжительность работ в часах.\n"
+        "Например: <code>1</code>, <code>2.5</code>, <code>0.5</code>\n\n"
+        "Или напишите <code>0</code>, если время неизвестно.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_maintenance_duration)
+async def fsm_maintenance_duration(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    text = message.text.strip().replace(",", ".")
+    try:
+        hours = float(text)
+        if hours < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Введите число ≥ 0 (например: <code>1</code>, <code>2.5</code>, <code>0</code>)",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_cancel_keyboard(),
+        )
+        return
+    await state.update_data(maintenance_hours=hours)
+    await state.set_state(AdminStates.waiting_maintenance_reason)
+    await message.answer(
+        "📝 Теперь введите причину технических работ\n"
+        "(она будет показана пользователям):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.message(AdminStates.waiting_maintenance_reason)
+async def fsm_maintenance_reason(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    hours = data.get("maintenance_hours", 0)
+    reason = message.text.strip()
+
+    maintenance["active"] = True
+    maintenance["reason"] = reason
+    maintenance["until_ts"] = time.time() + hours * 3600 if hours > 0 else None
+
+    await state.clear()
+
+    if hours > 0:
+        until_str = datetime.fromtimestamp(maintenance["until_ts"]).strftime("%d.%m.%Y в %H:%M")
+        time_info = f"⏱ До: <b>{until_str}</b>"
+    else:
+        time_info = "⏱ Время окончания: неизвестно"
+
+    await message.answer(
+        f"🔧 <b>Тех. работы включены!</b>\n\n"
+        f"{time_info}\n"
+        f"📌 Причина: <i>{reason}</i>\n\n"
+        f"Все пользователи будут получать сообщение о работах.\n"
+        f"Чтобы выключить — нажми <b>🔧 Тех. работы</b> в админ панели ещё раз.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")]
+        ]),
+    )
 
 
 # ─── Admin: Model management ─────────────────────────────────────────────────
