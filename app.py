@@ -327,6 +327,13 @@ user_message_times: dict[int, list] = defaultdict(list)
 user_spam_warned: dict[int, float] = {}
 
 
+# ─── Custom exceptions ───────────────────────────────────────────────────────
+
+class RateLimitError(Exception):
+    """Raised when the upstream provider returns a 429 rate-limit error."""
+    pass
+
+
 # ─── FSM States ──────────────────────────────────────────────────────────────
 
 class AdminStates(StatesGroup):
@@ -1324,7 +1331,11 @@ async def call_ai(session: dict, user_message: str) -> str:
         async with http.post(api_url, json=payload, headers=headers) as resp:
             data = await resp.json()
     if "choices" not in data:
-        error_msg = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
+        err = data.get("error", {})
+        code = err.get("code") or data.get("code")
+        if code == 429:
+            raise RateLimitError(MODELS[session["model"]]["name"])
+        error_msg = err.get("message", json.dumps(data, ensure_ascii=False))
         raise ValueError(error_msg)
     reply = data["choices"][0]["message"]["content"]
     # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
@@ -1392,8 +1403,17 @@ async def handle_message(message: Message):
                 # Fallback: send as plain text if Markdown parsing fails
                 await message.answer(chunk)
 
+    except RateLimitError as e:
+        logger.warning(f"Rate limit for user {user_id}: {e}")
+        await thinking_msg.edit_text(
+            f"⏳ <b>Модель {e} перегружена.</b>\n\n"
+            f"Бесплатный лимит запросов временно исчерпан у провайдера. "
+            f"Подождите минуту и попробуйте снова, или выберите другую модель.\n\n"
+            f"🤖 /model — сменить модель",
+            parse_mode=ParseMode.HTML
+        )
     except Exception as e:
-        logger.error(f"Groq error for user {user_id}: {e}")
+        logger.error(f"AI error for user {user_id}: {e}")
         err = str(e)[:300]
         await thinking_msg.edit_text(
             f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
