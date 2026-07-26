@@ -396,9 +396,21 @@ class AntiSpamMiddleware(BaseMiddleware):
         else:
             return await handler(event, data)
 
-        # admin bypasses all restrictions
+        # admin bypasses all restrictions (full bypass when not in test mode)
         if is_admin(user_id):
             return await handler(event, data)
+
+        # real admin in test mode: always allow admin panel access so they can switch back
+        if user_id == ADMIN_ID and admin_test_mode:
+            is_admin_panel_action = (
+                isinstance(event, Message) and event.text == "🛡 Админ панель"
+            ) or (
+                isinstance(event, CallbackQuery)
+                and event.data is not None
+                and (event.data.startswith("admin:") or event.data.startswith("mctrl:"))
+            )
+            if is_admin_panel_action:
+                return await handler(event, data)
 
         # maintenance mode — block everyone except admin
         if is_maintenance():
