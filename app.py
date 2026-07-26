@@ -114,33 +114,6 @@ MODELS = {
         "emoji_html": pe("5913787972200698358", "⚗️"),
         "emoji_id": "5913787972200698358",
     },
-    "fw_maverick": {
-        "name": "Llama 4 Maverick",
-        "model_id": "accounts/fireworks/models/llama4-maverick-instruct-basic",
-        "provider": "fireworks",
-        "description": "Llama 4 Maverick от Meta через Fireworks. Мощная MoE-архитектура, топовое качество.",
-        "emoji": "🦅",
-        "emoji_html": pe("5931472654660800739", "🦅"),
-        "emoji_id": "5931472654660800739",
-    },
-    "fw_deepseek_r1": {
-        "name": "DeepSeek R1",
-        "model_id": "accounts/fireworks/models/deepseek-r1",
-        "provider": "fireworks",
-        "description": "DeepSeek R1 через Fireworks. Мощная модель с цепочкой рассуждений (CoT).",
-        "emoji": "🔍",
-        "emoji_html": pe("5776233299424843260", "🔍"),
-        "emoji_id": "5776233299424843260",
-    },
-    "fw_qwen3": {
-        "name": "Qwen3 235B",
-        "model_id": "accounts/fireworks/models/qwen3-235b-a22b",
-        "provider": "fireworks",
-        "description": "Qwen3 235B через Fireworks. Огромная модель с исключительным качеством рассуждений.",
-        "emoji": "🌌",
-        "emoji_html": pe("5388957777676745182", "🌌"),
-        "emoji_id": "5388957777676745182",
-    },
 }
 
 SYSTEM_PROMPTS = {
@@ -418,9 +391,7 @@ MODEL_STYLES = {
     "qwen3_32b": "success",
     "qwen3_27b": "primary",
     "compound": "danger",
-    "fw_maverick": "danger",
-    "fw_deepseek_r1": "primary",
-    "fw_qwen3": "success",
+
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
