@@ -418,6 +418,9 @@ MODEL_STYLES = {
     "qwen3_32b": "success",
     "qwen3_27b": "primary",
     "compound": "danger",
+    "fw_maverick": "danger",
+    "fw_deepseek_r1": "primary",
+    "fw_qwen3": "success",
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
