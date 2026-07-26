@@ -147,6 +147,42 @@ ROLES = {
 }
 
 
+# ─── Communication styles ─────────────────────────────────────────────────────
+
+STYLES = {
+    "calm": {
+        "name": "Спокойный",
+        "emoji": "😌",
+        "description": "Вежливо, нейтрально, по делу.",
+        "instruction": "Общайся спокойно, вежливо и нейтрально. Без эмоциональных крайностей.",
+    },
+    "fun": {
+        "name": "Весёлый",
+        "emoji": "😄",
+        "description": "С юмором, шутками и позитивом.",
+        "instruction": "Общайся весело и с юмором, шути, используй позитивные эмоции, будь непосредственным и живым.",
+    },
+    "bold": {
+        "name": "Дерзкий",
+        "emoji": "😏",
+        "description": "Прямой, уверенный, без лишних слов.",
+        "instruction": "Общайся дерзко и уверенно: говори прямо, без лишних слов и политесов, чётко и по существу.",
+    },
+    "rude": {
+        "name": "Грубый",
+        "emoji": "😤",
+        "description": "Резко, без сентиментов, жёстко.",
+        "instruction": "Общайся грубо и резко: без сочувствия, без мягкости, максимально жёстко и прямолинейно.",
+    },
+    "swear": {
+        "name": "С матами",
+        "emoji": "🤬",
+        "description": "Максимально неформально, с матерными словами.",
+        "instruction": "Общайся максимально неформально и используй русский мат естественно в речи, как это делают в разговоре друзья. Не стесняйся крепких выражений.",
+    },
+}
+
+
 # ─── User data (profiles + Zenotoken) ────────────────────────────────────────
 
 def load_users() -> dict:
@@ -378,9 +414,13 @@ def get_session(user_id: int) -> dict:
         user_sessions[user_id] = {
             "model": "llama3_70b",
             "role": "default",
+            "style": "calm",
             "history": [],
             "temperature": 0.7,
         }
+    else:
+        # Ensure older sessions have the style key
+        user_sessions[user_id].setdefault("style", "calm")
     return user_sessions[user_id]
 
 
@@ -504,6 +544,23 @@ def admin_cancel_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def styles_keyboard(current: str) -> InlineKeyboardMarkup:
+    buttons = []
+    for key, style in STYLES.items():
+        check = "✅ " if key == current else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{check}{style['emoji']} {style['name']} — {style['description']}",
+            callback_data=f"style:{key}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def start_inline_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗣 Стиль общения", callback_data="style:menu")]
+    ])
+
+
 # ─── Router ───────────────────────────────────────────────────────────────────
 
 router = Router()
@@ -518,16 +575,28 @@ async def cmd_start(message: Message):
     session = get_session(user.id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
+    style = STYLES[session["style"]]
     caption = (
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
         f"Я — ИИ-ассистент с доступом к лучшим <b>бесплатным</b> языковым моделям (Groq).\n\n"
         f"📌 <b>Текущие настройки:</b>\n"
         f"• Модель: {model['emoji_html']} {model['name']}\n"
-        f"• Роль: {role['emoji_html']} {role['name']}\n\n"
+        f"• Роль: {role['emoji_html']} {role['name']}\n"
+        f"• Стиль: {style['emoji']} {style['name']}\n\n"
         f"Просто напиши мне сообщение — и я отвечу!"
     )
     photo = FSInputFile("welcome_photo.jpg")
-    await message.answer_photo(photo, caption=caption, parse_mode=ParseMode.HTML, reply_markup=main_keyboard(user.id))
+    await message.answer_photo(
+        photo,
+        caption=caption,
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_keyboard(user.id),
+    )
+    await message.answer(
+        "👇 Нажми кнопку ниже, чтобы выбрать стиль общения нейросети:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=start_inline_keyboard(),
+    )
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
@@ -1183,6 +1252,48 @@ async def fsm_give_amount(message: Message, state: FSMContext, bot: Bot):
 
 # ─── Callbacks: model / role / temp / settings ───────────────────────────────
 
+# ─── Callbacks: communication style ──────────────────────────────────────────
+
+@router.callback_query(F.data == "style:menu")
+async def cb_style_menu(callback: CallbackQuery):
+    session = get_session(callback.from_user.id)
+    current = session.get("style", "calm")
+    styles_text = "\n".join(
+        f"{s['emoji']} <b>{s['name']}</b> — {s['description']}"
+        for s in STYLES.values()
+    )
+    await callback.message.edit_text(
+        f"🗣 <b>Стиль общения нейросети</b>\n\n"
+        f"Выбери, как именно ИИ будет с тобой общаться:\n\n"
+        f"{styles_text}\n\n"
+        f"👇 Выбери стиль:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=styles_keyboard(current),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("style:"))
+async def cb_style(callback: CallbackQuery):
+    style_key = callback.data.split(":", 1)[1]
+    if style_key == "menu" or style_key not in STYLES:
+        await callback.answer()
+        return
+    session = get_session(callback.from_user.id)
+    session["style"] = style_key
+    session["history"] = []  # reset history so new style applies cleanly
+    style = STYLES[style_key]
+    await callback.message.edit_text(
+        f"{style['emoji']} <b>Стиль общения изменён: {style['name']}</b>\n\n"
+        f"<i>{style['description']}</i>\n\n"
+        f"История диалога сброшена, чтобы стиль применился сразу.\n\n"
+        f"👇 Хочешь поменять ещё раз?",
+        parse_mode=ParseMode.HTML,
+        reply_markup=styles_keyboard(style_key),
+    )
+    await callback.answer(f"Стиль: {style['emoji']} {style['name']}")
+
+
 @router.callback_query(F.data.startswith("model:"))
 async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
@@ -1258,10 +1369,14 @@ async def call_ai(session: dict, user_message: str) -> str:
     model_id = model_cfg["model_id"]
 
     today = datetime.now().strftime("%d.%m.%Y")
+    style_key = session.get("style", "calm")
+    style_instruction = STYLES[style_key]["instruction"]
     system_prompt = (
         f"Сегодняшняя дата: {today}. Используй эту дату как актуальную текущую дату и год, "
         f"а не дату из своих обучающих данных.\n\n"
-        f"{SYSTEM_PROMPTS[session['role']]}\n\n{COMMON_INSTRUCTIONS}"
+        f"{SYSTEM_PROMPTS[session['role']]}\n\n"
+        f"СТИЛЬ ОБЩЕНИЯ: {style_instruction}\n\n"
+        f"{COMMON_INSTRUCTIONS}"
     )
 
     session["history"].append({"role": "user", "content": user_message})
