@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -113,6 +113,42 @@ MODELS = {
         "emoji": "⚗️",
         "emoji_html": pe("5913787972200698358", "⚗️"),
         "emoji_id": "5913787972200698358",
+    },
+    "or_llama4_maverick": {
+        "name": "Llama 4 Maverick",
+        "model_id": "meta-llama/llama-4-maverick:free",
+        "provider": "openrouter",
+        "description": "Llama 4 Maverick от Meta — мощная MoE-модель. Бесплатно через OpenRouter.",
+        "emoji": "🦅",
+        "emoji_html": pe("5931472654660800739", "🦅"),
+        "emoji_id": "5931472654660800739",
+    },
+    "or_deepseek_r1": {
+        "name": "DeepSeek R1",
+        "model_id": "deepseek/deepseek-r1:free",
+        "provider": "openrouter",
+        "description": "DeepSeek R1 — модель с цепочкой рассуждений. Топовое качество бесплатно.",
+        "emoji": "🔍",
+        "emoji_html": pe("5879841310902324730", "🔍"),
+        "emoji_id": "5879841310902324730",
+    },
+    "or_deepseek_v3": {
+        "name": "DeepSeek V3",
+        "model_id": "deepseek/deepseek-chat-v3-0324:free",
+        "provider": "openrouter",
+        "description": "DeepSeek V3 — быстрая и умная модель для повседневных задач. Бесплатно.",
+        "emoji": "💡",
+        "emoji_html": pe("5323761960829862762", "💡"),
+        "emoji_id": "5323761960829862762",
+    },
+    "or_gemma3": {
+        "name": "Gemma 3 27B",
+        "model_id": "google/gemma-3-27b-it:free",
+        "provider": "openrouter",
+        "description": "Gemma 3 от Google, 27B параметров. Отличный баланс скорости и качества.",
+        "emoji": "🌿",
+        "emoji_html": pe("5776233299424843260", "🌿"),
+        "emoji_id": "5776233299424843260",
     },
 }
 
@@ -391,7 +427,10 @@ MODEL_STYLES = {
     "qwen3_32b": "success",
     "qwen3_27b": "primary",
     "compound": "danger",
-
+    "or_llama4_maverick": "danger",
+    "or_deepseek_r1": "primary",
+    "or_deepseek_v3": "success",
+    "or_gemma3": "success",
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -1258,9 +1297,9 @@ async def call_ai(session: dict, user_message: str) -> str:
 
     messages = [{"role": "system", "content": system_prompt}] + session["history"]
 
-    if provider == "fireworks":
-        api_url = FIREWORKS_API_URL
-        api_key = FIREWORKS_API_KEY
+    if provider == "openrouter":
+        api_url = OPENROUTER_API_URL
+        api_key = OPENROUTER_API_KEY
     else:
         api_url = GROQ_API_URL
         api_key = GROQ_API_KEY
@@ -1274,6 +1313,8 @@ async def call_ai(session: dict, user_message: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://t.me/Trialteamai_bot",
+        "X-Title": "Zeno AI",
     }
     async with aiohttp.ClientSession() as http:
         async with http.post(api_url, json=payload, headers=headers) as resp:
