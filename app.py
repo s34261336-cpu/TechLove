@@ -27,10 +27,8 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -66,14 +64,21 @@ def is_admin(user_id: int) -> bool:
 # ─── Models & Roles ──────────────────────────────────────────────────────────
 
 MODELS = {
-    "llama4_scout": {
+    "gpt_oss_120b": {
         "name": "GPT-OSS 120B",
         "model_id": "openai/gpt-oss-120b",
-        "provider": "openrouter",
         "description": "Мощная 120B модель с открытыми весами от OpenAI. Топовое качество ответов.",
         "emoji": "🦙",
         "emoji_html": pe("5926783847453692661", "🦙"),
         "emoji_id": "5926783847453692661",
+    },
+    "gpt_oss_20b": {
+        "name": "GPT-OSS 20B",
+        "model_id": "openai/gpt-oss-20b",
+        "description": "Быстрая 20B модель от OpenAI с открытыми весами. Молниеносные ответы.",
+        "emoji": "⚡",
+        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_id": "5323761960829862762",
     },
     "llama3_70b": {
         "name": "Llama 3.3 70B",
@@ -91,18 +96,9 @@ MODELS = {
         "emoji_html": pe("5323761960829862762", "⚡️"),
         "emoji_id": "5323761960829862762",
     },
-    "qwen3_32b": {
-        "name": "Groq Compound Mini",
-        "model_id": "compound-beta-mini",
-        "description": "Компактная составная модель Groq. Быстрая и умная — лучший баланс скорости и качества.",
-        "emoji": "🌀",
-        "emoji_html": pe("5388957777676745182", "🌀"),
-        "emoji_id": "5388957777676745182",
-    },
     "qwen3_27b": {
         "name": "Qwen3.6 27B",
         "model_id": "qwen/qwen3.6-27b",
-        "provider": "openrouter",
         "description": "Новейшая Qwen3.6. Отличный баланс скорости и интеллекта.",
         "emoji": "🔮",
         "emoji_html": pe("5776233299424843260", "🔮"),
@@ -116,40 +112,12 @@ MODELS = {
         "emoji_html": pe("5913787972200698358", "⚗️"),
         "emoji_id": "5913787972200698358",
     },
-    "or_gemma4_31b": {
-        "name": "Gemma 4 31B",
-        "model_id": "google/gemma-4-31b-it:free",
-        "provider": "openrouter",
-        "description": "Новейшая Gemma 4 от Google. Мощная, умная и полностью бесплатная.",
-        "emoji": "💎",
-        "emoji_html": pe("5776233299424843260", "💎"),
-        "emoji_id": "5776233299424843260",
-    },
-    "or_gemma4_26b": {
-        "name": "Gemma 4 26B MoE",
-        "model_id": "google/gemma-4-26b-a4b-it:free",
-        "provider": "openrouter",
-        "description": "Gemma 4 с архитектурой MoE от Google. Быстрая и умная — лучший баланс скорости.",
-        "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡"),
-        "emoji_id": "5323761960829862762",
-    },
-    "or_nemotron_ultra": {
-        "name": "Nemotron 3 Ultra 550B",
-        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "provider": "openrouter",
-        "description": "Гигантская 550B модель от NVIDIA. Топовое качество рассуждений — полностью бесплатно.",
-        "emoji": "🚀",
-        "emoji_html": pe("5931472654660800739", "🚀"),
-        "emoji_id": "5931472654660800739",
-    },
-    "or_nemotron_super": {
-        "name": "Nemotron 3 Super 120B",
-        "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
-        "provider": "openrouter",
-        "description": "120B модель от NVIDIA с огромным контекстом. Мощная и бесплатная.",
-        "emoji": "🔮",
-        "emoji_html": pe("5388957777676745182", "🔮"),
+    "qwen3_32b": {
+        "name": "Groq Compound Mini",
+        "model_id": "compound-beta-mini",
+        "description": "Компактная составная модель Groq. Быстрая и умная — лучший баланс скорости и качества.",
+        "emoji": "🌀",
+        "emoji_html": pe("5388957777676745182", "🌀"),
         "emoji_id": "5388957777676745182",
     },
 }
@@ -430,16 +398,13 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
 
 
 MODEL_STYLES = {
-    "llama4_scout": "danger",
+    "gpt_oss_120b": "danger",
+    "gpt_oss_20b": "primary",
     "llama3_70b": "success",
     "llama3_8b": "primary",
-    "qwen3_32b": "success",
     "qwen3_27b": "primary",
     "compound": "danger",
-    "or_gemma4_31b": "success",
-    "or_gemma4_26b": "primary",
-    "or_nemotron_ultra": "danger",
-    "or_nemotron_super": "primary",
+    "qwen3_32b": "success",
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -1291,7 +1256,6 @@ async def cb_noop(callback: CallbackQuery):
 async def call_ai(session: dict, user_message: str) -> str:
     model_cfg = MODELS[session["model"]]
     model_id = model_cfg["model_id"]
-    provider = model_cfg.get("provider", "groq")
 
     today = datetime.now().strftime("%d.%m.%Y")
     system_prompt = (
@@ -1306,13 +1270,6 @@ async def call_ai(session: dict, user_message: str) -> str:
 
     messages = [{"role": "system", "content": system_prompt}] + session["history"]
 
-    if provider == "openrouter":
-        api_url = OPENROUTER_API_URL
-        api_key = OPENROUTER_API_KEY
-    else:
-        api_url = GROQ_API_URL
-        api_key = GROQ_API_KEY
-
     payload = {
         "model": model_id,
         "messages": messages,
@@ -1320,10 +1277,8 @@ async def call_ai(session: dict, user_message: str) -> str:
         "max_tokens": 2048,
     }
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://t.me/Trialteamai_bot",
-        "X-Title": "Zeno AI",
     }
     async with aiohttp.ClientSession() as http:
         async with http.post(api_url, json=payload, headers=headers) as resp:
