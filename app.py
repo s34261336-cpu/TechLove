@@ -590,12 +590,12 @@ async def cmd_start(message: Message):
         photo,
         caption=caption,
         parse_mode=ParseMode.HTML,
-        reply_markup=main_keyboard(user.id),
+        reply_markup=start_inline_keyboard(),
     )
     await message.answer(
-        "👇 Нажми кнопку ниже, чтобы выбрать стиль общения нейросети:",
+        "👇 Выбери раздел:",
         parse_mode=ParseMode.HTML,
-        reply_markup=start_inline_keyboard(),
+        reply_markup=main_keyboard(user.id),
     )
 
 
