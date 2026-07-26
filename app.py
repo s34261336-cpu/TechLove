@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -111,6 +113,33 @@ MODELS = {
         "emoji": "⚗️",
         "emoji_html": pe("5913787972200698358", "⚗️"),
         "emoji_id": "5913787972200698358",
+    },
+    "fw_maverick": {
+        "name": "Llama 4 Maverick",
+        "model_id": "accounts/fireworks/models/llama4-maverick-instruct-basic",
+        "provider": "fireworks",
+        "description": "Llama 4 Maverick от Meta через Fireworks. Мощная MoE-архитектура, топовое качество.",
+        "emoji": "🦅",
+        "emoji_html": pe("5931472654660800739", "🦅"),
+        "emoji_id": "5931472654660800739",
+    },
+    "fw_deepseek_r1": {
+        "name": "DeepSeek R1",
+        "model_id": "accounts/fireworks/models/deepseek-r1",
+        "provider": "fireworks",
+        "description": "DeepSeek R1 через Fireworks. Мощная модель с цепочкой рассуждений (CoT).",
+        "emoji": "🔍",
+        "emoji_html": pe("5776233299424843260", "🔍"),
+        "emoji_id": "5776233299424843260",
+    },
+    "fw_qwen3": {
+        "name": "Qwen3 235B",
+        "model_id": "accounts/fireworks/models/qwen3-235b-a22b",
+        "provider": "fireworks",
+        "description": "Qwen3 235B через Fireworks. Огромная модель с исключительным качеством рассуждений.",
+        "emoji": "🌌",
+        "emoji_html": pe("5388957777676745182", "🌌"),
+        "emoji_id": "5388957777676745182",
     },
 }
 
@@ -1237,8 +1266,11 @@ async def cb_noop(callback: CallbackQuery):
 
 # ─── Groq API ─────────────────────────────────────────────────────────────────
 
-async def call_groq(session: dict, user_message: str) -> str:
-    model_id = MODELS[session["model"]]["model_id"]
+async def call_ai(session: dict, user_message: str) -> str:
+    model_cfg = MODELS[session["model"]]
+    model_id = model_cfg["model_id"]
+    provider = model_cfg.get("provider", "groq")
+
     today = datetime.now().strftime("%d.%m.%Y")
     system_prompt = (
         f"Сегодняшняя дата: {today}. Используй эту дату как актуальную текущую дату и год, "
@@ -1252,6 +1284,13 @@ async def call_groq(session: dict, user_message: str) -> str:
 
     messages = [{"role": "system", "content": system_prompt}] + session["history"]
 
+    if provider == "fireworks":
+        api_url = FIREWORKS_API_URL
+        api_key = FIREWORKS_API_KEY
+    else:
+        api_url = GROQ_API_URL
+        api_key = GROQ_API_KEY
+
     payload = {
         "model": model_id,
         "messages": messages,
@@ -1259,17 +1298,17 @@ async def call_groq(session: dict, user_message: str) -> str:
         "max_tokens": 2048,
     }
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     async with aiohttp.ClientSession() as http:
-        async with http.post(GROQ_API_URL, json=payload, headers=headers) as resp:
+        async with http.post(api_url, json=payload, headers=headers) as resp:
             data = await resp.json()
     if "choices" not in data:
         error_msg = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
         raise ValueError(error_msg)
     reply = data["choices"][0]["message"]["content"]
-    # Strip chain-of-thought thinking blocks (Qwen3, Groq Compound, etc.)
+    # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
     reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
     session["history"].append({"role": "assistant", "content": reply})
     return reply
@@ -1320,7 +1359,7 @@ async def handle_message(message: Message):
     )
 
     try:
-        reply = await call_groq(session, text)
+        reply = await call_ai(session, text)
 
         header = f"<i>{role['emoji_html']} {role['name']} · {model['name']}</i>"
 
