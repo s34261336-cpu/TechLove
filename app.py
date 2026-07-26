@@ -1280,6 +1280,7 @@ async def call_ai(session: dict, user_message: str) -> str:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
+    api_url = GROQ_API_URL
     async with aiohttp.ClientSession() as http:
         async with http.post(api_url, json=payload, headers=headers) as resp:
             data = await resp.json()
