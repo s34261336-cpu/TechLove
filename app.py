@@ -137,10 +137,10 @@ MODELS = {
         "emoji_id": "5323761960829862762",
     },
     "or_gemma4": {
-        "name": "Gemma 4 31B",
-        "model_id": "google/gemma-4-31b-it:free",
+        "name": "Gemma 4 26B",
+        "model_id": "google/gemma-4-26b-a4b-it:free",
         "provider": "openrouter",
-        "description": "Gemma 4 от Google, 31B параметров. Новейшая бесплатная модель Google.",
+        "description": "Gemma 4 от Google, MoE архитектура. Быстрее и стабильнее — меньше ограничений.",
         "emoji": "🌿",
         "emoji_html": pe("5776233299424843260", "🌿"),
         "emoji_id": "5776233299424843260",
