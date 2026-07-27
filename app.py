@@ -1605,16 +1605,10 @@ async def call_ai(session: dict, user_message: str) -> str:
             error_msg = err.get("message", json.dumps(data, ensure_ascii=False))
             raise ValueError(error_msg)
         reply = data["choices"][0]["message"]["content"]
-        # compound-beta may return None content when only tool calls were made
+        # compound-beta may return None content when it only emitted tool calls
+        # without a final text — treat as a retryable error so history stays clean
         if reply is None:
-            reply = ""
-            for choice in data.get("choices", []):
-                tool_calls = choice.get("message", {}).get("tool_calls") or []
-                for tc in tool_calls:
-                    out = tc.get("function", {}).get("output") or tc.get("output") or ""
-                    if out:
-                        reply += out + "\n"
-            reply = reply.strip() or "Модель не вернула текстовый ответ. Попробуйте другую модель."
+            raise ValueError("Модель не вернула текстовый ответ. Попробуйте ещё раз или смените модель (/model).")
         # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
         reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
         session["history"].append({"role": "assistant", "content": reply})
