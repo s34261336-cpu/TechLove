@@ -1,1 +1,30 @@
-{}
+{
+  "sn_gemma4_31b": {
+    "restricted": true,
+    "type": "permanent",
+    "reason": "67",
+    "until": null,
+    "restricted_at": "27.07.2026 06:30"
+  },
+  "sn_deepseek_v3_2": {
+    "restricted": true,
+    "type": "permanent",
+    "reason": "67",
+    "until": null,
+    "restricted_at": "27.07.2026 06:30"
+  },
+  "sn_deepseek_v3_1": {
+    "restricted": true,
+    "type": "permanent",
+    "reason": "67",
+    "until": null,
+    "restricted_at": "27.07.2026 06:30"
+  },
+  "sn_gpt_oss_120b": {
+    "restricted": true,
+    "type": "permanent",
+    "reason": "52",
+    "until": null,
+    "restricted_at": "27.07.2026 06:31"
+  }
+}
