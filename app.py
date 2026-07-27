@@ -139,24 +139,7 @@ MODELS = {
         "emoji_id": "5776233299424843260",
         "provider": "sambanova",
     },
-    "sn_llama33_70b": {
-        "name": "Llama 3.3 70B",
-        "model_id": "Meta-Llama-3.3-70B-Instruct",
-        "description": "Meta Llama 3.3 70B на SambaNova. Быстрый и умный универсальный ассистент.",
-        "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
-        "emoji_id": "5323761960829862762",
-        "provider": "sambanova",
-    },
-    "sn_minimax": {
-        "name": "MiniMax M2.7",
-        "model_id": "MiniMax-M2.7",
-        "description": "MiniMax M2.7 — мощная модель смешанной экспертизы. Отличный баланс скорости и качества.",
-        "emoji": "🌀",
-        "emoji_html": pe("5388957777676745182", "🌀"),
-        "emoji_id": "5388957777676745182",
-        "provider": "sambanova",
-    },
+
     "sn_gemma4_31b": {
         "name": "Gemma 4 31B",
         "model_id": "gemma-4-31B-it",
@@ -555,8 +538,7 @@ MODEL_STYLES = {
     "qwen3_32b": "success",
     "sn_deepseek_v3_1": "danger",
     "sn_deepseek_v3_2": "danger",
-    "sn_llama33_70b": "success",
-    "sn_minimax": "primary",
+
     "sn_gemma4_31b": "success",
     "sn_gpt_oss_120b": "danger",
 }
