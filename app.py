@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
+SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -118,6 +120,60 @@ MODELS = {
         "emoji": "🌀",
         "emoji_html": pe("5388957777676745182", "🌀"),
         "emoji_id": "5388957777676745182",
+    },
+    "sn_deepseek_v3_1": {
+        "name": "DeepSeek V3.1",
+        "model_id": "DeepSeek-V3.1",
+        "description": "Новейший DeepSeek V3.1 — один из сильнейших открытых ИИ. Логика, код, анализ.",
+        "emoji": "🧠",
+        "emoji_html": pe("5805553606635559688", "🧠"),
+        "emoji_id": "5805553606635559688",
+        "provider": "sambanova",
+    },
+    "sn_deepseek_v3_2": {
+        "name": "DeepSeek V3.2",
+        "model_id": "DeepSeek-V3.2",
+        "description": "Самый свежий DeepSeek V3.2. Улучшенная точность и рассуждения.",
+        "emoji": "🔭",
+        "emoji_html": pe("5776233299424843260", "🔭"),
+        "emoji_id": "5776233299424843260",
+        "provider": "sambanova",
+    },
+    "sn_llama33_70b": {
+        "name": "Llama 3.3 70B",
+        "model_id": "Meta-Llama-3.3-70B-Instruct",
+        "description": "Meta Llama 3.3 70B на SambaNova. Быстрый и умный универсальный ассистент.",
+        "emoji": "⚡",
+        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_id": "5323761960829862762",
+        "provider": "sambanova",
+    },
+    "sn_minimax": {
+        "name": "MiniMax M2.7",
+        "model_id": "MiniMax-M2.7",
+        "description": "MiniMax M2.7 — мощная модель смешанной экспертизы. Отличный баланс скорости и качества.",
+        "emoji": "🌀",
+        "emoji_html": pe("5388957777676745182", "🌀"),
+        "emoji_id": "5388957777676745182",
+        "provider": "sambanova",
+    },
+    "sn_gemma4_31b": {
+        "name": "Gemma 4 31B",
+        "model_id": "gemma-4-31B-it",
+        "description": "Google Gemma 4 31B на SambaNova. Многомодальная, умная, быстрая.",
+        "emoji": "💎",
+        "emoji_html": pe("5258093637450866522", "💎"),
+        "emoji_id": "5258093637450866522",
+        "provider": "sambanova",
+    },
+    "sn_gpt_oss_120b": {
+        "name": "GPT-OSS 120B",
+        "model_id": "gpt-oss-120b",
+        "description": "OpenAI GPT-OSS 120B с открытыми весами на SambaNova. Топовое качество.",
+        "emoji": "🦙",
+        "emoji_html": pe("5926783847453692661", "🦙"),
+        "emoji_id": "5926783847453692661",
+        "provider": "sambanova",
     },
 }
 
@@ -497,6 +553,12 @@ MODEL_STYLES = {
     "qwen3_27b": "primary",
     "compound": "danger",
     "qwen3_32b": "success",
+    "sn_deepseek_v3_1": "danger",
+    "sn_deepseek_v3_2": "danger",
+    "sn_llama33_70b": "success",
+    "sn_minimax": "primary",
+    "sn_gemma4_31b": "success",
+    "sn_gpt_oss_120b": "danger",
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -1537,11 +1599,17 @@ async def call_ai(session: dict, user_message: str) -> str:
         "temperature": session["temperature"],
         "max_tokens": 2048,
     }
+    provider = model_cfg.get("provider", "groq")
+    if provider == "sambanova":
+        api_url = SAMBANOVA_API_URL
+        api_key = SAMBANOVA_API_KEY
+    else:
+        api_url = GROQ_API_URL
+        api_key = GROQ_API_KEY
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    api_url = GROQ_API_URL
     async with aiohttp.ClientSession() as http:
         async with http.post(api_url, json=payload, headers=headers) as resp:
             data = await resp.json()
