@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -119,6 +121,33 @@ MODELS = {
         "emoji": "🌀",
         "emoji_html": pe("5388957777676745182", "🌀"),
         "emoji_id": "5388957777676745182",
+    },
+    "cerebras_llama33_70b": {
+        "name": "Llama 3.3 70B (Cerebras)",
+        "model_id": "llama-3.3-70b",
+        "description": "Llama 3.3 70B на сверхбыстрых чипах Cerebras. Молниеносная скорость генерации.",
+        "emoji": "⚡",
+        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_id": "5323761960829862762",
+        "provider": "cerebras",
+    },
+    "cerebras_llama31_8b": {
+        "name": "Llama 3.1 8B (Cerebras)",
+        "model_id": "llama3.1-8b",
+        "description": "Лёгкая Llama 3.1 8B на Cerebras. Самая быстрая модель для мгновенных ответов.",
+        "emoji": "🚀",
+        "emoji_html": pe("5314536790874230525", "🚀"),
+        "emoji_id": "5314536790874230525",
+        "provider": "cerebras",
+    },
+    "cerebras_qwen3_32b": {
+        "name": "Qwen3 32B (Cerebras)",
+        "model_id": "qwen-3-32b",
+        "description": "Qwen3 32B на чипах Cerebras. Мощный интеллект с невероятной скоростью.",
+        "emoji": "🔮",
+        "emoji_html": pe("5776233299424843260", "🔮"),
+        "emoji_id": "5776233299424843260",
+        "provider": "cerebras",
     },
 }
 
@@ -498,6 +527,9 @@ MODEL_STYLES = {
     "qwen3_27b": "primary",
     "compound": "danger",
     "qwen3_32b": "success",
+    "cerebras_llama33_70b": "success",
+    "cerebras_llama31_8b": "primary",
+    "cerebras_qwen3_32b": "primary",
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -1538,11 +1570,17 @@ async def call_ai(session: dict, user_message: str) -> str:
         "temperature": session["temperature"],
         "max_tokens": 2048,
     }
+    provider = model_cfg.get("provider", "groq")
+    if provider == "cerebras":
+        api_url = CEREBRAS_API_URL
+        api_key = CEREBRAS_API_KEY
+    else:
+        api_url = GROQ_API_URL
+        api_key = GROQ_API_KEY
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    api_url = GROQ_API_URL
     async with aiohttp.ClientSession() as http:
         async with http.post(api_url, json=payload, headers=headers) as resp:
             data = await resp.json()
