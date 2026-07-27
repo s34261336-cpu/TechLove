@@ -1569,6 +1569,7 @@ async def call_ai(session: dict, user_message: str) -> str:
         f"{COMMON_INSTRUCTIONS}"
     )
 
+    history_snapshot = list(session["history"])
     session["history"].append({"role": "user", "content": user_message})
     if len(session["history"]) > 20:
         session["history"] = session["history"][-20:]
@@ -1592,21 +1593,36 @@ async def call_ai(session: dict, user_message: str) -> str:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    async with aiohttp.ClientSession() as http:
-        async with http.post(api_url, json=payload, headers=headers) as resp:
-            data = await resp.json()
-    if "choices" not in data:
-        err = data.get("error", {})
-        code = err.get("code") or data.get("code")
-        if code == 429:
-            raise RateLimitError(MODELS[session["model"]]["name"])
-        error_msg = err.get("message", json.dumps(data, ensure_ascii=False))
-        raise ValueError(error_msg)
-    reply = data["choices"][0]["message"]["content"]
-    # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
-    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
-    session["history"].append({"role": "assistant", "content": reply})
-    return reply
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(api_url, json=payload, headers=headers) as resp:
+                data = await resp.json()
+        if "choices" not in data:
+            err = data.get("error", {})
+            code = err.get("code") or data.get("code")
+            if code == 429:
+                raise RateLimitError(MODELS[session["model"]]["name"])
+            error_msg = err.get("message", json.dumps(data, ensure_ascii=False))
+            raise ValueError(error_msg)
+        reply = data["choices"][0]["message"]["content"]
+        # compound-beta may return None content when only tool calls were made
+        if reply is None:
+            reply = ""
+            for choice in data.get("choices", []):
+                tool_calls = choice.get("message", {}).get("tool_calls") or []
+                for tc in tool_calls:
+                    out = tc.get("function", {}).get("output") or tc.get("output") or ""
+                    if out:
+                        reply += out + "\n"
+            reply = reply.strip() or "Модель не вернула текстовый ответ. Попробуйте другую модель."
+        # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
+        reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+        session["history"].append({"role": "assistant", "content": reply})
+        return reply
+    except Exception:
+        # Restore history to pre-call state so broken exchange doesn't poison context
+        session["history"] = history_snapshot
+        raise
 
 
 def escape_md(text: str) -> str:
