@@ -658,17 +658,16 @@ MODEL_STYLES = {
 
 def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMarkup:
     # ── Filter row at the top ──────────────────────────────────────────────────
-    def _filter_btn(label: str, key: str) -> InlineKeyboardButton:
+    FILTER_STYLES = {"all": "primary", "free": "success", "paid": "danger"}
+    filter_row = []
+    for key, label in [("all", "📋 Все"), ("free", "🆓 Бесплатные"), ("paid", "🪙 Платные")]:
         active = filter_mode == key
-        return InlineKeyboardButton(
+        btn = InlineKeyboardButton(
             text=f"✅ {label}" if active else label,
             callback_data=f"mfilter:{key}",
         )
-    filter_row = [
-        _filter_btn("📋 Все", "all"),
-        _filter_btn("🆓 Бесплатные", "free"),
-        _filter_btn("🪙 Платные", "paid"),
-    ]
+        btn.style = FILTER_STYLES[key]
+        filter_row.append(btn)
 
     # ── Model buttons ─────────────────────────────────────────────────────────
     all_btns = []
@@ -689,6 +688,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
             callback_data=f"model:{key}",
             icon_custom_emoji_id=get_model_emoji_id(key),
         )
+        btn.style = MODEL_STYLES.get(key, "primary")
         all_btns.append(btn)
 
     model_rows = [all_btns[i:i + 2] for i in range(0, len(all_btns), 2)]
