@@ -68,5 +68,14 @@
     "reason": "Топчик",
     "until": null,
     "restricted_at": "30.07.2026 06:38"
+  },
+  "_prices": {
+    "or_nemotron_9b": 2,
+    "or_gpt_oss_20b": 4,
+    "or_ling_flash": 2,
+    "or_gemma4_26b": 1,
+    "or_nemotron_30b": 2,
+    "or_nemotron_120b": 2,
+    "or_nemotron_550b": 3
   }
 }
