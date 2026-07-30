@@ -27,41 +27,6 @@
     "until": null,
     "restricted_at": "27.07.2026 06:31"
   },
-  "or_gpt_oss_20b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "Хз",
-    "until": null,
-    "restricted_at": "30.07.2026 06:37"
-  },
-  "or_ling_flash": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "Хз",
-    "until": null,
-    "restricted_at": "30.07.2026 06:37"
-  },
-  "or_nemotron_30b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "Топ",
-    "until": null,
-    "restricted_at": "30.07.2026 06:37"
-  },
-  "or_nemotron_120b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "Топ",
-    "until": null,
-    "restricted_at": "30.07.2026 06:38"
-  },
-  "or_nemotron_9b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "Топчик",
-    "until": null,
-    "restricted_at": "30.07.2026 06:38"
-  },
   "_prices": {
     "or_nemotron_9b": 2,
     "or_gpt_oss_20b": 4,
