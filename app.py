@@ -372,6 +372,21 @@ def give_tokens(user_id: int, amount: int) -> int:
     save_users(data)
     return data[uid]["zenotoken"]
 
+def deduct_tokens(user_id: int, amount: int) -> tuple[bool, int]:
+    """Deduct tokens from user balance.
+    Returns (success, new_balance). success=False means insufficient funds.
+    """
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return False, 0
+    current = data[uid].get("zenotoken", 0)
+    if current < amount:
+        return False, current
+    data[uid]["zenotoken"] = current - amount
+    save_users(data)
+    return True, data[uid]["zenotoken"]
+
 def get_all_users() -> list:
     data = load_users()
     return list(data.values())
@@ -420,6 +435,24 @@ def restrict_model(model_key: str, reason: str, until_ts: float | None = None):
 def unrestrict_model(model_key: str):
     data = load_restrictions()
     data.pop(model_key, None)
+    save_restrictions(data)
+
+
+# ─── Model pricing ────────────────────────────────────────────────────────────
+
+def get_model_price(model_key: str) -> int:
+    """Returns cost in ZenoTokens per request (0 = free)."""
+    data = load_restrictions()
+    return data.get("_prices", {}).get(model_key, 0)
+
+def set_model_price(model_key: str, price: int):
+    data = load_restrictions()
+    if "_prices" not in data:
+        data["_prices"] = {}
+    if price <= 0:
+        data["_prices"].pop(model_key, None)
+    else:
+        data["_prices"][model_key] = price
     save_restrictions(data)
 
 
@@ -486,6 +519,7 @@ class AdminStates(StatesGroup):
     waiting_temp_reason = State()
     waiting_maintenance_duration = State()
     waiting_maintenance_reason = State()
+    waiting_set_price = State()
 
 
 # ─── Anti-spam middleware ─────────────────────────────────────────────────────
@@ -578,10 +612,12 @@ def get_session(user_id: int) -> dict:
             "style": "calm",
             "history": [],
             "temperature": 0.7,
+            "models_filter": "all",
         }
     else:
         # Ensure older sessions have the style key
         user_sessions[user_id].setdefault("style", "calm")
+        user_sessions[user_id].setdefault("models_filter", "all")
     return user_sessions[user_id]
 
 
@@ -620,22 +656,46 @@ MODEL_STYLES = {
     "or_nemotron_9b": "primary",
 }
 
-def models_keyboard(current: str) -> InlineKeyboardMarkup:
+def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMarkup:
+    # ── Filter row at the top ──────────────────────────────────────────────────
+    def _filter_btn(label: str, key: str) -> InlineKeyboardButton:
+        active = filter_mode == key
+        return InlineKeyboardButton(
+            text=f"✅ {label}" if active else label,
+            callback_data=f"mfilter:{key}",
+        )
+    filter_row = [
+        _filter_btn("📋 Все", "all"),
+        _filter_btn("🆓 Бесплатные", "free"),
+        _filter_btn("🪙 Платные", "paid"),
+    ]
+
+    # ── Model buttons ─────────────────────────────────────────────────────────
     all_btns = []
     for key, model in MODELS.items():
+        price = get_model_price(key)
+        is_paid = price > 0
+
+        # Apply filter
+        if filter_mode == "free" and is_paid:
+            continue
+        if filter_mode == "paid" and not is_paid:
+            continue
+
         check = "✅ " if key == current else ""
-        style = MODEL_STYLES[key]
+        price_tag = f" · 🪙{price}" if is_paid else ""
         btn = InlineKeyboardButton(
-            text=f"{check}{model['name']}",
+            text=f"{check}{model['name']}{price_tag}",
             callback_data=f"model:{key}",
             icon_custom_emoji_id=get_model_emoji_id(key),
         )
-        if style:
-            btn.style = style
         all_btns.append(btn)
-    # 2 buttons per row
-    buttons = [all_btns[i:i+2] for i in range(0, len(all_btns), 2)]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    model_rows = [all_btns[i:i + 2] for i in range(0, len(all_btns), 2)]
+    if not all_btns:
+        model_rows = [[InlineKeyboardButton(text="— В этой категории нет моделей —", callback_data="noop")]]
+
+    return InlineKeyboardMarkup(inline_keyboard=[filter_row] + model_rows)
 
 
 def roles_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -676,6 +736,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin:users")],
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
         [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
+        [InlineKeyboardButton(text="💰 Цена за запрос", callback_data="admin:prices")],
         [InlineKeyboardButton(text=test_label, callback_data="admin:testmode")],
         [InlineKeyboardButton(text=maint_label, callback_data="admin:maintenance")],
     ])
@@ -811,10 +872,11 @@ async def cmd_help(message: Message):
 @router.message(F.text == "🤖 Модель")
 async def cmd_model(message: Message):
     session = get_session(message.from_user.id)
+    filter_mode = session.get("models_filter", "all")
     await message.answer(
         f"{pe('5258093637450866522', '🤖')} <b>Выберите модель ИИ:</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=models_keyboard(session["model"])
+        reply_markup=models_keyboard(session["model"], filter_mode)
     )
 
 
@@ -1030,6 +1092,89 @@ async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
     await callback.answer("Отменено")
+
+
+# ─── Admin: Price management ──────────────────────────────────────────────────
+
+def admin_prices_keyboard() -> InlineKeyboardMarkup:
+    buttons = []
+    for key, model in MODELS.items():
+        price = get_model_price(key)
+        price_label = f"🆓 Бесплатно" if price == 0 else f"🪙 {price}"
+        buttons.append([InlineKeyboardButton(
+            text=f"{model['name']} — {price_label}",
+            callback_data=f"aprice:pick:{key}",
+            icon_custom_emoji_id=model["emoji_id"],
+        )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+@router.callback_query(F.data == "admin:prices")
+async def cb_admin_prices(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "💰 <b>Цена за запрос</b>\n\n"
+        "Нажмите на модель, чтобы изменить стоимость одного запроса в ZenoToken.\n"
+        "<i>0 = бесплатная модель</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_prices_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("aprice:pick:"))
+async def cb_aprice_pick(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    model_key = callback.data.split(":", 2)[2]
+    model = MODELS[model_key]
+    current_price = get_model_price(model_key)
+    await state.set_state(AdminStates.waiting_set_price)
+    await state.update_data(price_model_key=model_key)
+    await callback.message.edit_text(
+        f"💰 <b>Цена за запрос — {model['name']}</b>\n\n"
+        f"Текущая цена: <b>{'🆓 Бесплатно' if current_price == 0 else f'🪙 {current_price}'}</b>\n\n"
+        f"Введите новую цену (целое число, 0 = бесплатно):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_set_price)
+async def fsm_set_price(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        price = int(message.text.strip())
+        if price < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Введите целое число ≥ 0 (например: 0, 5, 10)",
+            reply_markup=admin_cancel_keyboard()
+        )
+        return
+    data = await state.get_data()
+    model_key = data["price_model_key"]
+    model = MODELS[model_key]
+    set_model_price(model_key, price)
+    await state.clear()
+    price_str = "🆓 Бесплатно" if price == 0 else f"🪙 {price} ZenoToken за запрос"
+    await message.answer(
+        f"✅ <b>Цена обновлена!</b>\n\n"
+        f"Модель: <b>{model['name']}</b>\n"
+        f"Новая цена: <b>{price_str}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 К ценам", callback_data="admin:prices")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
+        ])
+    )
 
 
 @router.callback_query(F.data == "admin:testmode")
@@ -1561,6 +1706,17 @@ async def cb_style(callback: CallbackQuery):
     await callback.answer(f"Стиль: {style['emoji']} {style['name']}")
 
 
+@router.callback_query(F.data.startswith("mfilter:"))
+async def cb_mfilter(callback: CallbackQuery):
+    filter_mode = callback.data.split(":")[1]
+    session = get_session(callback.from_user.id)
+    session["models_filter"] = filter_mode
+    await callback.message.edit_reply_markup(
+        reply_markup=models_keyboard(session["model"], filter_mode)
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("model:"))
 async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
@@ -1583,10 +1739,16 @@ async def cb_model(callback: CallbackQuery):
 
     session = get_session(callback.from_user.id)
     session["model"] = model_key
+    filter_mode = session.get("models_filter", "all")
+
+    price = get_model_price(model_key)
+    price_line = f"\n\n🪙 <b>Стоимость запроса: {price} ZenoToken</b>" if price > 0 else ""
+
     await callback.message.edit_text(
-        f"{pe('5370893703575511656', '✅')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n<i>{model['description']}</i>",
+        f"{pe('5370893703575511656', '✅')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"<i>{model['description']}</i>{price_line}",
         parse_mode=ParseMode.HTML,
-        reply_markup=models_keyboard(model_key)
+        reply_markup=models_keyboard(model_key, filter_mode)
     )
     await callback.answer(f"Выбрана: {model['name']}")
 
@@ -1626,6 +1788,18 @@ async def cb_settings_close(callback: CallbackQuery):
 
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data == "open:model")
+async def cb_open_model(callback: CallbackQuery):
+    session = get_session(callback.from_user.id)
+    filter_mode = session.get("models_filter", "all")
+    await callback.message.answer(
+        f"{pe('5258093637450866522', '🤖')} <b>Выберите модель ИИ:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=models_keyboard(session["model"], filter_mode)
+    )
     await callback.answer()
 
 
@@ -1737,6 +1911,33 @@ async def handle_message(message: Message):
                 f"{time_note}\n"
                 f"📌 Причина: <i>{r['reason']}</i>\n\n"
                 f"Выберите другую модель через кнопку 🤖 Модель.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+    # ZenoToken check & deduction for paid models (admin exempt)
+    token_price = get_model_price(session["model"])
+    if token_price > 0 and not is_admin(user_id):
+        profile = get_user_profile(user_id)
+        balance = profile.get("zenotoken", 0)
+        if balance < token_price:
+            await message.answer(
+                f"🪙 <b>Недостаточно ZenoToken!</b>\n\n"
+                f"Модель <b>{model['name']}</b> стоит <b>{token_price} 🪙</b> за запрос.\n"
+                f"Ваш баланс: <b>{balance} 🪙</b>\n\n"
+                f"Выберите бесплатную модель или обратитесь к администратору для пополнения баланса.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🤖 Сменить модель", callback_data="open:model")]
+                ])
+            )
+            return
+        success, new_balance = deduct_tokens(user_id, token_price)
+        if not success:
+            await message.answer(
+                f"🪙 <b>Недостаточно ZenoToken!</b>\n\n"
+                f"Нужно <b>{token_price} 🪙</b>, у вас <b>{balance} 🪙</b>.\n\n"
+                f"Выберите бесплатную модель через кнопку 🤖 Модель.",
                 parse_mode=ParseMode.HTML,
             )
             return
