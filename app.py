@@ -670,33 +670,51 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         btn.style = FILTER_STYLES[key]
         filter_row.append(btn)
 
-    # ── Model buttons ─────────────────────────────────────────────────────────
-    all_btns = []
-    for key, model in MODELS.items():
-        price = get_model_price(key)
-        is_paid = price > 0
+    # ── Models grouped by provider ────────────────────────────────────────────
+    PROVIDER_GROUPS = [
+        ("groq",       "⚡️ GROQ"),
+        ("sambanova",  "🔥 SAMBANOVA"),
+        ("openrouter", "🌐 OPENROUTER"),
+    ]
 
-        # Apply filter
-        if filter_mode == "free" and is_paid:
+    rows: list[list[InlineKeyboardButton]] = [filter_row]
+    any_model = False
+
+    for provider_key, provider_label in PROVIDER_GROUPS:
+        group_btns: list[InlineKeyboardButton] = []
+        for key, model in MODELS.items():
+            if model.get("provider", "groq") != provider_key:
+                continue
+            price = get_model_price(key)
+            is_paid = price > 0
+            if filter_mode == "free" and is_paid:
+                continue
+            if filter_mode == "paid" and not is_paid:
+                continue
+
+            check = "✅ " if key == current else ""
+            price_tag = f" · 🪙{price}" if is_paid else ""
+            btn = InlineKeyboardButton(
+                text=f"{check}{model['name']}{price_tag}",
+                callback_data=f"model:{key}",
+                icon_custom_emoji_id=get_model_emoji_id(key),
+            )
+            btn.style = MODEL_STYLES.get(key, "primary")
+            group_btns.append(btn)
+
+        if not group_btns:
             continue
-        if filter_mode == "paid" and not is_paid:
-            continue
 
-        check = "✅ " if key == current else ""
-        price_tag = f" · 🪙{price}" if is_paid else ""
-        btn = InlineKeyboardButton(
-            text=f"{check}{model['name']}{price_tag}",
-            callback_data=f"model:{key}",
-            icon_custom_emoji_id=get_model_emoji_id(key),
-        )
-        btn.style = MODEL_STYLES.get(key, "primary")
-        all_btns.append(btn)
+        any_model = True
+        # Section divider (full-width, non-clickable label)
+        rows.append([InlineKeyboardButton(text=f"━━━ {provider_label} ━━━", callback_data="noop")])
+        # 2 models per row
+        rows += [group_btns[i:i + 2] for i in range(0, len(group_btns), 2)]
 
-    model_rows = [all_btns[i:i + 2] for i in range(0, len(all_btns), 2)]
-    if not all_btns:
-        model_rows = [[InlineKeyboardButton(text="— В этой категории нет моделей —", callback_data="noop")]]
+    if not any_model:
+        rows.append([InlineKeyboardButton(text="— В этой категории нет моделей —", callback_data="noop")])
 
-    return InlineKeyboardMarkup(inline_keyboard=[filter_row] + model_rows)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def roles_keyboard(current: str) -> InlineKeyboardMarkup:
