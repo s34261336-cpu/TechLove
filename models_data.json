@@ -41,13 +41,6 @@
     "until": null,
     "restricted_at": "30.07.2026 06:37"
   },
-  "or_gemma4_26b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "Топ",
-    "until": null,
-    "restricted_at": "30.07.2026 06:37"
-  },
   "or_nemotron_30b": {
     "restricted": true,
     "type": "permanent",

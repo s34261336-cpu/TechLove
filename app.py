@@ -841,16 +841,16 @@ async def cmd_start(message: Message):
 @router.message(F.text == "ℹ️ Помощь")
 async def cmd_help(message: Message):
     models_text = "\n".join(
-        f"• {m['emoji_html']} <b>{m['name']}</b> — {m['description']}" for m in MODELS.values()
+        f"• {m['emoji']} <b>{m['name']}</b> — {m['description']}" for m in MODELS.values()
     )
     roles_text = "\n".join(
-        f"• {r['emoji_html']} <b>{r['name']}</b>" for r in ROLES.values()
+        f"• {r['emoji']} <b>{r['name']}</b>" for r in ROLES.values()
     )
     text = (
         "📖 <b>Как пользоваться:</b>\n\n"
         "Просто пишите сообщение — бот отвечает с учётом истории разговора.\n\n"
-        f"{pe('5258093637450866522', '🤖')} <b>Модели (все бесплатные):</b>\n{models_text}\n\n"
-        f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
+        f"🤖 <b>Модели:</b>\n{models_text}\n\n"
+        f"🎭 <b>Роли:</b>\n{roles_text}\n\n"
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n\n"
@@ -917,8 +917,8 @@ async def cmd_status(message: Message):
     role = ROLES[session["role"]]
     text = (
         f"⚙️ <b>Текущие настройки:</b>\n\n"
-        f"{pe('5258093637450866522', '🤖')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
-        f"🎭 Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
+        f"🤖 Модель: {model['emoji']} <b>{model['name']}</b>\n"
+        f"🎭 Роль: {role['emoji']} <b>{role['name']}</b>\n"
         f"🌡 Температура: <b>{session['temperature']:.1f}</b>\n"
         f"💬 Сообщений в истории: <b>{len(session['history'])}</b>"
     )
