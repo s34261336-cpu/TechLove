@@ -1607,9 +1607,10 @@ async def call_ai(session: dict, user_message: str) -> str:
         if "choices" not in data:
             err = data.get("error", {})
             code = err.get("code") or data.get("code")
-            if code == 429:
-                raise RateLimitError(MODELS[session["model"]]["name"])
             error_msg = err.get("message", json.dumps(data, ensure_ascii=False))
+            # 429 or "high demand" / "overloaded" messages → rate limit
+            if code == 429 or any(kw in error_msg.lower() for kw in ("high demand", "overloaded", "try again later", "rate limit")):
+                raise RateLimitError(MODELS[session["model"]]["name"])
             raise ValueError(error_msg)
         reply = data["choices"][0]["message"]["content"]
         # compound-beta may return None content when it only emitted tool calls
