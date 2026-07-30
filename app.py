@@ -129,6 +129,8 @@ MODELS = {
         "emoji_html": pe("5805553606635559688", "🧠"),
         "emoji_id": "5805553606635559688",
         "provider": "sambanova",
+        "max_tokens": 1024,
+        "no_thinking": True,
     },
     "sn_deepseek_v3_2": {
         "name": "DeepSeek V3.2",
@@ -138,6 +140,8 @@ MODELS = {
         "emoji_html": pe("5776233299424843260", "🔭"),
         "emoji_id": "5776233299424843260",
         "provider": "sambanova",
+        "max_tokens": 1024,
+        "no_thinking": True,
     },
 
     "sn_gemma4_31b": {
@@ -148,6 +152,7 @@ MODELS = {
         "emoji_html": pe("5258093637450866522", "💎"),
         "emoji_id": "5258093637450866522",
         "provider": "sambanova",
+        "max_tokens": 1024,
     },
     "sn_gpt_oss_120b": {
         "name": "GPT-OSS 120B",
@@ -1580,8 +1585,10 @@ async def call_ai(session: dict, user_message: str) -> str:
         "model": model_id,
         "messages": messages,
         "temperature": session["temperature"],
-        "max_tokens": 2048,
+        "max_tokens": model_cfg.get("max_tokens", 2048),
     }
+    if model_cfg.get("no_thinking"):
+        payload["thinking"] = {"type": "disabled"}
     provider = model_cfg.get("provider", "groq")
     if provider == "sambanova":
         api_url = SAMBANOVA_API_URL
