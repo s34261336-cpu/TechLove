@@ -30,6 +30,8 @@ GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -162,6 +164,69 @@ MODELS = {
         "emoji_html": pe("5926783847453692661", "🦙"),
         "emoji_id": "5926783847453692661",
         "provider": "sambanova",
+    },
+    "or_nemotron_550b": {
+        "name": "Nemotron Ultra 550B",
+        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "description": "Гигантская 550B модель от NVIDIA. Один из самых мощных открытых ИИ в мире.",
+        "emoji": "🚀",
+        "emoji_html": pe("5314536790874230525", "🚀"),
+        "emoji_id": "5314536790874230525",
+        "provider": "openrouter",
+    },
+    "or_nemotron_120b": {
+        "name": "Nemotron Super 120B",
+        "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "description": "120B модель NVIDIA. Умная, быстрая, отлично справляется со сложными задачами.",
+        "emoji": "⚡",
+        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_id": "5323761960829862762",
+        "provider": "openrouter",
+    },
+    "or_nemotron_30b": {
+        "name": "Nemotron Nano 30B",
+        "model_id": "nvidia/nemotron-3-nano-30b-a3b:free",
+        "description": "Компактная 30B модель NVIDIA. Быстрые ответы при хорошем качестве.",
+        "emoji": "🌀",
+        "emoji_html": pe("5388957777676745182", "🌀"),
+        "emoji_id": "5388957777676745182",
+        "provider": "openrouter",
+    },
+    "or_gemma4_26b": {
+        "name": "Gemma 4 26B",
+        "model_id": "google/gemma-4-26b-a4b-it:free",
+        "description": "Google Gemma 4 26B — многомодальная модель с поддержкой изображений.",
+        "emoji": "💎",
+        "emoji_html": pe("5776233299424843260", "💎"),
+        "emoji_id": "5776233299424843260",
+        "provider": "openrouter",
+    },
+    "or_ling_flash": {
+        "name": "Ling 3.0 Flash",
+        "model_id": "inclusionai/ling-3.0-flash:free",
+        "description": "Ling 3.0 Flash — быстрая и умная модель от InclusionAI.",
+        "emoji": "🔮",
+        "emoji_html": pe("5258093637450866522", "🔮"),
+        "emoji_id": "5258093637450866522",
+        "provider": "openrouter",
+    },
+    "or_gpt_oss_20b": {
+        "name": "GPT-OSS 20B",
+        "model_id": "openai/gpt-oss-20b:free",
+        "description": "OpenAI GPT-OSS 20B с открытыми весами. Молниеносный и бесплатный.",
+        "emoji": "🧠",
+        "emoji_html": pe("5805553606635559688", "🧠"),
+        "emoji_id": "5805553606635559688",
+        "provider": "openrouter",
+    },
+    "or_nemotron_9b": {
+        "name": "Nemotron Nano 9B",
+        "model_id": "nvidia/nemotron-nano-9b-v2:free",
+        "description": "Лёгкая 9B модель NVIDIA. Максимально быстрая для простых задач.",
+        "emoji": "⚡",
+        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_id": "5323761960829862762",
+        "provider": "openrouter",
     },
 }
 
@@ -546,6 +611,13 @@ MODEL_STYLES = {
 
     "sn_gemma4_31b": "success",
     "sn_gpt_oss_120b": "danger",
+    "or_nemotron_550b": "danger",
+    "or_nemotron_120b": "success",
+    "or_nemotron_30b": "primary",
+    "or_gemma4_26b": "success",
+    "or_ling_flash": "primary",
+    "or_gpt_oss_20b": "primary",
+    "or_nemotron_9b": "primary",
 }
 
 def models_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -1593,6 +1665,9 @@ async def call_ai(session: dict, user_message: str) -> str:
     if provider == "sambanova":
         api_url = SAMBANOVA_API_URL
         api_key = SAMBANOVA_API_KEY
+    elif provider == "openrouter":
+        api_url = OPENROUTER_API_URL
+        api_key = OPENROUTER_API_KEY
     else:
         api_url = GROQ_API_URL
         api_key = GROQ_API_KEY
