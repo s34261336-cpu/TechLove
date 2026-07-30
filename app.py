@@ -1773,12 +1773,15 @@ async def cb_model(callback: CallbackQuery):
     price = get_model_price(model_key)
     price_line = f"\n\n🪙 <b>Стоимость запроса: {price} ZenoToken</b>" if price > 0 else ""
 
-    await callback.message.edit_text(
-        f"{pe('5370893703575511656', '✅')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
-        f"<i>{model['description']}</i>{price_line}",
-        parse_mode=ParseMode.HTML,
-        reply_markup=models_keyboard(model_key, filter_mode)
-    )
+    try:
+        await callback.message.edit_text(
+            f"{pe('5370893703575511656', '✅')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
+            f"<i>{model['description']}</i>{price_line}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=models_keyboard(model_key, filter_mode)
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer(f"Выбрана: {model['name']}")
 
 
@@ -2012,6 +2015,24 @@ async def handle_message(message: Message):
             f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
             parse_mode=ParseMode.HTML
         )
+
+
+# ─── Global error handler ─────────────────────────────────────────────────────
+
+@router.errors()
+async def global_error_handler(event, exception: Exception):
+    """Silently ignore 'message is not modified' and similar Telegram edit errors."""
+    if isinstance(exception, TelegramBadRequest):
+        text = str(exception).lower()
+        if any(phrase in text for phrase in (
+            "message is not modified",
+            "message can't be edited",
+            "message to edit not found",
+            "query is too old",
+        )):
+            return True  # suppressed
+    logger.error(f"Unhandled error: {exception}", exc_info=exception)
+    return False
 
 
 # ─── Bot commands ─────────────────────────────────────────────────────────────
