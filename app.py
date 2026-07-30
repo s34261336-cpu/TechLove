@@ -21,6 +21,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from aiogram.exceptions import TelegramBadRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -841,16 +842,16 @@ async def cmd_start(message: Message):
 @router.message(F.text == "ℹ️ Помощь")
 async def cmd_help(message: Message):
     models_text = "\n".join(
-        f"• {m['emoji']} <b>{m['name']}</b> — {m['description']}" for m in MODELS.values()
+        f"• {m['emoji_html']} <b>{m['name']}</b> — {m['description']}" for m in MODELS.values()
     )
     roles_text = "\n".join(
-        f"• {r['emoji']} <b>{r['name']}</b>" for r in ROLES.values()
+        f"• {r['emoji_html']} <b>{r['name']}</b>" for r in ROLES.values()
     )
     text = (
         "📖 <b>Как пользоваться:</b>\n\n"
         "Просто пишите сообщение — бот отвечает с учётом истории разговора.\n\n"
-        f"🤖 <b>Модели:</b>\n{models_text}\n\n"
-        f"🎭 <b>Роли:</b>\n{roles_text}\n\n"
+        f"{pe('5258093637450866522', '🤖')} <b>Модели:</b>\n{models_text}\n\n"
+        f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n\n"
@@ -863,7 +864,14 @@ async def cmd_help(message: Message):
         "/profile — мой профиль\n"
         "/help — помощь"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard(message.from_user.id))
+    kb = main_keyboard(message.from_user.id)
+    try:
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "DOCUMENT_INVALID" in str(e):
+            await message.answer(strip_tg_emoji(text), parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            raise
 
 
 # ─── /model ───────────────────────────────────────────────────────────────────
@@ -917,16 +925,19 @@ async def cmd_status(message: Message):
     role = ROLES[session["role"]]
     text = (
         f"⚙️ <b>Текущие настройки:</b>\n\n"
-        f"🤖 Модель: {model['emoji']} <b>{model['name']}</b>\n"
-        f"🎭 Роль: {role['emoji']} <b>{role['name']}</b>\n"
+        f"{pe('5258093637450866522', '🤖')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
+        f"🎭 Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
         f"🌡 Температура: <b>{session['temperature']:.1f}</b>\n"
         f"💬 Сообщений в истории: <b>{len(session['history'])}</b>"
     )
-    await message.answer(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=settings_keyboard(message.from_user.id)
-    )
+    kb = settings_keyboard(message.from_user.id)
+    try:
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "DOCUMENT_INVALID" in str(e):
+            await message.answer(strip_tg_emoji(text), parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            raise
 
 
 # ─── /profile ─────────────────────────────────────────────────────────────────
@@ -1874,6 +1885,11 @@ async def call_ai(session: dict, user_message: str) -> str:
         # Restore history to pre-call state so broken exchange doesn't poison context
         session["history"] = history_snapshot
         raise
+
+
+def strip_tg_emoji(text: str) -> str:
+    """Strip <tg-emoji> tags keeping the fallback character (used when DOCUMENT_INVALID)."""
+    return re.sub(r'<tg-emoji[^>]*>(.*?)</tg-emoji>', r'\1', text, flags=re.DOTALL)
 
 
 def escape_md(text: str) -> str:
