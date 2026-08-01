@@ -7,6 +7,8 @@ from datetime import datetime
 from collections import defaultdict
 import time
 import aiohttp
+from urllib.parse import quote as url_quote
+from io import BytesIO
 
 from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher, F, Router
@@ -15,6 +17,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject, FSInputFile,
+    BufferedInputFile,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -521,6 +524,11 @@ class AdminStates(StatesGroup):
     waiting_maintenance_duration = State()
     waiting_maintenance_reason = State()
     waiting_set_price = State()
+
+
+class ImgStates(StatesGroup):
+    waiting_prompt = State()
+    has_prompt = State()
 
 
 # ─── Anti-spam middleware ─────────────────────────────────────────────────────
@@ -1835,6 +1843,149 @@ async def cb_open_model(callback: CallbackQuery):
     await callback.answer()
 
 
+# ─── /img — Image generation ──────────────────────────────────────────────────
+
+IMG_WELCOME_TEXT = (
+    "🎨 <b>Генератор изображений</b>\n\n"
+    "Я создам картинку по вашему описанию с помощью нейросети Pollinations AI.\n\n"
+    "✦ Чем подробнее описание — тем лучше результат.\n"
+    "✦ Можно писать на русском или английском."
+)
+
+
+@router.message(Command("img"))
+async def cmd_img(message: Message, state: FSMContext):
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")]
+    ])
+    await message.answer(IMG_WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@router.callback_query(F.data == "img:prompt")
+async def cb_img_prompt(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ImgStates.waiting_prompt)
+    await state.update_data(img_msg_id=callback.message.message_id)
+    await callback.message.edit_text(
+        "✏️ <b>Что рисуем?</b>\n\n"
+        "Напишите описание картинки — чем подробнее, тем лучше результат.\n\n"
+        "<i>Пример: закат над горами, в стиле аниме, яркие цвета</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="img:cancel")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(ImgStates.waiting_prompt, F.text)
+async def fsm_img_prompt(message: Message, state: FSMContext):
+    prompt = message.text.strip()
+    data = await state.get_data()
+    await state.update_data(current_prompt=prompt)
+    await state.set_state(ImgStates.has_prompt)
+
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 Создать картинку", callback_data="img:generate")],
+        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
+    ])
+    text = (
+        f"{IMG_WELCOME_TEXT}\n\n"
+        f"<b>Ваш промт:</b>\n<i>{prompt}</i>"
+    )
+
+    img_msg_id = data.get("img_msg_id")
+    if img_msg_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=img_msg_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb
+            )
+            return
+        except TelegramBadRequest:
+            pass
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@router.callback_query(ImgStates.has_prompt, F.data == "img:generate")
+async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    prompt = data.get("current_prompt", "")
+
+    await callback.answer("🎨 Создаю...")
+    await callback.message.edit_text(
+        f"⏳ <b>Рисую картинку...</b>\n\n<i>{prompt}</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+    try:
+        encoded = url_quote(prompt)
+        seed = int(time.time())
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"?width=1024&height=1024&nologo=true&seed={seed}"
+        )
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                if resp.status != 200:
+                    raise ValueError(f"HTTP {resp.status}")
+                img_bytes = await resp.read()
+
+        photo = BufferedInputFile(img_bytes, filename="image.jpg")
+        kb_photo = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Ещё вариант", callback_data="img:generate")],
+            [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt")],
+        ])
+        await callback.message.answer_photo(
+            photo,
+            caption=f"🎨 <i>{prompt}</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_photo
+        )
+
+        # Restore the menu
+        kb_menu = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 Создать ещё", callback_data="img:generate")],
+            [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
+        ])
+        await callback.message.edit_text(
+            f"{IMG_WELCOME_TEXT}\n\n<b>Последний промт:</b>\n<i>{prompt}</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_menu
+        )
+
+    except Exception as e:
+        logger.error(f"Pollinations error: {e}")
+        kb_err = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="img:generate")],
+            [InlineKeyboardButton(text="✏️ Новый промт", callback_data="img:prompt")],
+        ])
+        await callback.message.edit_text(
+            "❌ <b>Не удалось создать картинку.</b>\n\n"
+            "Сервис временно недоступен. Попробуйте снова или измените описание.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_err
+        )
+
+
+@router.callback_query(F.data == "img:cancel")
+async def cb_img_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")]
+    ])
+    await callback.message.edit_text(IMG_WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await callback.answer("Отменено")
+
+
 # ─── Groq API ─────────────────────────────────────────────────────────────────
 
 async def call_ai(session: dict, user_message: str) -> str:
@@ -2043,6 +2194,7 @@ async def set_commands(bot: Bot):
         BotCommand(command="new",     description="Новый диалог"),
         BotCommand(command="model",   description="Выбрать модель ИИ"),
         BotCommand(command="role",    description="Выбрать роль ассистента"),
+        BotCommand(command="img",     description="Сгенерировать изображение"),
         BotCommand(command="status",  description="Текущие настройки"),
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
         BotCommand(command="help",    description="Помощь"),
