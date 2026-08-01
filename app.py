@@ -1891,7 +1891,7 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
         pass
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Создать картинку", callback_data="img:generate")],
+        [InlineKeyboardButton(text="✅ Создать картинку", callback_data="img:generate")],
         [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
     ])
     text = (
@@ -1940,20 +1940,15 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 img_bytes = await resp.read()
 
         photo = BufferedInputFile(img_bytes, filename="image.jpg")
-        kb_photo = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Ещё вариант", callback_data="img:generate")],
-            [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt")],
-        ])
         await callback.message.answer_photo(
             photo,
             caption=f"🎨 <i>{prompt}</i>",
             parse_mode=ParseMode.HTML,
-            reply_markup=kb_photo
         )
 
         # Restore the menu
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 Создать ещё", callback_data="img:generate")],
+            [InlineKeyboardButton(text="✅ Создать ещё", callback_data="img:generate")],
             [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
         ])
         await callback.message.edit_text(
