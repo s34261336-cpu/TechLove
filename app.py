@@ -1891,7 +1891,7 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
         pass
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Создать картинку", callback_data="img:generate")],
+        [InlineKeyboardButton(text="Создать картинку", callback_data="img:generate", style="success")],
         [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
     ])
     text = (
@@ -1948,7 +1948,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
         # Restore the menu
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Создать ещё", callback_data="img:generate")],
+            [InlineKeyboardButton(text="Создать ещё", callback_data="img:generate", style="success")],
             [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
         ])
         await callback.message.edit_text(
