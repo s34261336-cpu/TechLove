@@ -1915,6 +1915,34 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
+async def translate_prompt(prompt: str) -> str:
+    """Translate prompt to English using Groq for better image generation results."""
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a prompt translator for image generation. "
+                    "Translate the user's description into a detailed English image generation prompt. "
+                    "Keep all visual details. Output ONLY the English prompt, nothing else."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 300,
+    }
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            GROQ_API_URL, json=payload, headers=headers,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            data = await resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+
+
 @router.callback_query(ImgStates.has_prompt, F.data == "img:generate")
 async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -1922,12 +1950,16 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("🎨 Создаю...")
     await callback.message.edit_text(
-        f"⏳ <b>Рисую картинку...</b>\n\n<i>{prompt}</i>",
+        f"⏳ <b>Перевожу промт и рисую...</b>\n\n<i>{prompt}</i>",
         parse_mode=ParseMode.HTML
     )
 
     try:
-        encoded = url_quote(prompt)
+        # Translate to English for better results
+        english_prompt = await translate_prompt(prompt)
+        logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
+
+        encoded = url_quote(english_prompt)
         seed = int(time.time())
         url = (
             f"https://image.pollinations.ai/prompt/{encoded}"
