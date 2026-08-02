@@ -1964,7 +1964,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         seed = int(time.time())
         url = (
             f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?width=1024&height=1024&nologo=true&seed={seed}"
+            f"?model=flux&width=768&height=768&nologo=true&seed={seed}"
         )
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
@@ -2102,10 +2102,11 @@ def escape_md(text: str) -> str:
 # ─── Vision: image analysis via OpenRouter ────────────────────────────────────
 
 # Free vision models tried in order until one succeeds
+# nemotron confirmed working with base64; gemma as fallback
 VISION_MODELS = [
+    "nvidia/nemotron-nano-12b-v2-vl:free",
     "google/gemma-4-31b-it:free",
     "google/gemma-4-26b-a4b-it:free",
-    "nvidia/nemotron-nano-12b-v2-vl:free",
 ]
 
 VISION_INTRO = (
@@ -2115,9 +2116,11 @@ VISION_INTRO = (
 )
 
 
-async def describe_image(image_url: str, user_question: str | None = None) -> str:
-    """Try each free vision model until one returns a result."""
+async def describe_image(image_bytes: bytes, user_question: str | None = None) -> str:
+    """Try each free vision model until one returns a result (uses base64)."""
     question = user_question or "Подробно опиши всё, что видишь на этом изображении. Отвечай на русском языке."
+    b64 = base64.b64encode(image_bytes).decode()
+    data_url = f"data:image/jpeg;base64,{b64}"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -2131,7 +2134,7 @@ async def describe_image(image_url: str, user_question: str | None = None) -> st
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "image_url", "image_url": {"url": data_url}},
                         {"type": "text", "text": question},
                     ],
                 }
@@ -2174,10 +2177,12 @@ async def handle_photo(message: Message):
     thinking = await message.answer("👁 <i>Смотрю на фото...</i>", parse_mode=ParseMode.HTML)
 
     try:
-        # Get direct Telegram file URL (no base64 needed)
+        # Download the photo and encode as base64
         photo = message.photo[-1]
         file = await message.bot.get_file(photo.file_id)
-        image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        bio = BytesIO()
+        await message.bot.download_file(file.file_path, bio)
+        image_bytes = bio.getvalue()
 
         # Use caption as the question if user wrote one
         user_question = None
@@ -2185,7 +2190,7 @@ async def handle_photo(message: Message):
             cap = message.caption.strip()
             user_question = f"{cap}\n\nОтвечай на русском языке."
 
-        description = await describe_image(image_url, user_question)
+        description = await describe_image(image_bytes, user_question)
         await thinking.delete()
         await message.answer(description)
 
