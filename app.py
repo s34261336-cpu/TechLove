@@ -2101,7 +2101,7 @@ def escape_md(text: str) -> str:
 
 # ─── Vision: Groq image analysis ──────────────────────────────────────────────
 
-VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+VISION_MODEL = "google/gemini-2.0-flash-exp:free"
 
 VISION_INTRO = (
     "👁 <b>Анализ изображений</b>\n\n"
@@ -2111,7 +2111,7 @@ VISION_INTRO = (
 
 
 async def describe_image(image_bytes: bytes, user_question: str | None = None) -> str:
-    """Send image to Groq Vision and return description."""
+    """Send image to OpenRouter Vision (Gemini) and return description."""
     b64 = base64.b64encode(image_bytes).decode()
     question = user_question or "Подробно опиши всё, что видишь на этом изображении. Отвечай на русском языке."
     payload = {
@@ -2131,11 +2131,15 @@ async def describe_image(image_bytes: bytes, user_question: str | None = None) -
         "temperature": 0.4,
         "max_tokens": 1024,
     }
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://t.me",
+    }
     async with aiohttp.ClientSession() as http:
         async with http.post(
-            GROQ_API_URL, json=payload, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=30)
+            OPENROUTER_API_URL, json=payload, headers=headers,
+            timeout=aiohttp.ClientTimeout(total=40)
         ) as resp:
             data = await resp.json()
             if resp.status != 200:
