@@ -1961,16 +1961,40 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
 
         encoded = url_quote(english_prompt)
-        seed = int(time.time())
-        url = (
-            f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?model=flux&width=768&height=768&nologo=true&seed={seed}"
-        )
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                if resp.status != 200:
-                    raise ValueError(f"HTTP {resp.status}")
-                img_bytes = await resp.read()
+        base_seed = int(time.time())
+
+        # Try flux model up to 3 times, then fallback to turbo
+        attempts = [
+            f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed}",
+            f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed+1}",
+            f"https://image.pollinations.ai/prompt/{encoded}?model=turbo&width=768&height=768&nologo=true&seed={base_seed}",
+        ]
+
+        img_bytes = None
+        last_err = ""
+        for attempt_num, url in enumerate(attempts, 1):
+            try:
+                await callback.message.edit_text(
+                    f"⏳ <b>Рисую...</b> (попытка {attempt_num}/3)\n\n<i>{prompt}</i>",
+                    parse_mode=ParseMode.HTML
+                )
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            # Make sure it's actually an image, not an error JSON
+                            if len(data) > 1000 and data[:2] in (b'\xff\xd8', b'\x89P'):
+                                img_bytes = data
+                                break
+                            last_err = f"invalid image data (attempt {attempt_num})"
+                        else:
+                            last_err = f"HTTP {resp.status}"
+            except Exception as e:
+                last_err = str(e)
+                logger.warning(f"Pollinations attempt {attempt_num} failed: {e}")
+
+        if not img_bytes:
+            raise ValueError(last_err or "all attempts failed")
 
         photo = BufferedInputFile(img_bytes, filename="image.jpg")
         await callback.message.answer_photo(
@@ -1979,7 +2003,6 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             parse_mode=ParseMode.HTML,
         )
 
-        # Restore the menu
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Создать ещё", callback_data="img:generate", style="success")],
             [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
@@ -1998,7 +2021,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         ])
         await callback.message.edit_text(
             "❌ <b>Не удалось создать картинку.</b>\n\n"
-            "Сервис временно недоступен. Попробуйте снова или измените описание.",
+            "Попробуйте снова или измените описание.",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_err
         )
@@ -2191,15 +2214,25 @@ async def handle_photo(message: Message):
             user_question = f"{cap}\n\nОтвечай на русском языке."
 
         description = await describe_image(image_bytes, user_question)
-        await thinking.delete()
-        await message.answer(description)
+        # Edit the thinking message instead of delete+answer
+        # so a network hiccup on answer() can't leave the user with nothing
+        try:
+            await thinking.edit_text(description)
+        except TelegramBadRequest:
+            # Message too long or other edit issue — send fresh
+            await thinking.delete()
+            for chunk in [description[i:i+4096] for i in range(0, len(description), 4096)]:
+                await message.answer(chunk)
 
     except Exception as e:
         logger.error(f"Vision error for user {user_id}: {e}")
-        await thinking.edit_text(
-            "❌ <b>Не удалось проанализировать фото.</b>\n\nПопробуйте ещё раз.",
-            parse_mode=ParseMode.HTML,
-        )
+        try:
+            await thinking.edit_text(
+                "❌ <b>Не удалось проанализировать фото.</b>\n\nПопробуйте ещё раз.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            await message.answer("❌ Не удалось проанализировать фото. Попробуйте ещё раз.")
 
 
 # ─── Message handler ──────────────────────────────────────────────────────────
