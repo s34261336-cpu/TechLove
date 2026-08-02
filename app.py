@@ -9,6 +9,7 @@ import time
 import aiohttp
 from urllib.parse import quote as url_quote
 from io import BytesIO
+import base64
 
 from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher, F, Router
@@ -2098,6 +2099,89 @@ def escape_md(text: str) -> str:
     return text
 
 
+# ─── Vision: Groq image analysis ──────────────────────────────────────────────
+
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+VISION_INTRO = (
+    "👁 <b>Анализ изображений</b>\n\n"
+    "Просто отправьте мне любое фото — я подробно расскажу, что на нём.\n\n"
+    "Работает прямо в этом чате, никаких команд больше не нужно."
+)
+
+
+async def describe_image(image_bytes: bytes, user_question: str | None = None) -> str:
+    """Send image to Groq Vision and return description."""
+    b64 = base64.b64encode(image_bytes).decode()
+    question = user_question or "Подробно опиши всё, что видишь на этом изображении. Отвечай на русском языке."
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
+                    {"type": "text", "text": question},
+                ],
+            }
+        ],
+        "temperature": 0.4,
+        "max_tokens": 1024,
+    }
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as http:
+        async with http.post(
+            GROQ_API_URL, json=payload, headers=headers,
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                raise ValueError(data.get("error", {}).get("message", f"HTTP {resp.status}"))
+            return data["choices"][0]["message"]["content"].strip()
+
+
+@router.message(Command("vision"))
+async def cmd_vision(message: Message):
+    await message.answer(VISION_INTRO, parse_mode=ParseMode.HTML)
+
+
+@router.message(F.photo)
+async def handle_photo(message: Message):
+    """Analyze any photo sent to the bot via Groq Vision."""
+    user_id = message.from_user.id
+    touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
+
+    thinking = await message.answer("👁 <i>Смотрю на фото...</i>", parse_mode=ParseMode.HTML)
+
+    try:
+        # Download the highest-resolution version
+        photo = message.photo[-1]
+        file = await message.bot.get_file(photo.file_id)
+        bio = BytesIO()
+        await message.bot.download_file(file.file_path, bio)
+        image_bytes = bio.getvalue()
+
+        # Use caption as the question if provided
+        user_question = None
+        if message.caption:
+            cap = message.caption.strip()
+            user_question = f"{cap}\n\nОтвечай на русском языке."
+
+        description = await describe_image(image_bytes, user_question)
+        await thinking.delete()
+        await message.answer(description, parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        logger.error(f"Vision error for user {user_id}: {e}")
+        await thinking.edit_text(
+            "❌ <b>Не удалось проанализировать фото.</b>\n\nПопробуйте ещё раз.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 # ─── Message handler ──────────────────────────────────────────────────────────
 
 @router.message(F.text)
@@ -2222,6 +2306,7 @@ async def set_commands(bot: Bot):
         BotCommand(command="model",   description="Выбрать модель ИИ"),
         BotCommand(command="role",    description="Выбрать роль ассистента"),
         BotCommand(command="img",     description="Сгенерировать изображение"),
+        BotCommand(command="vision",  description="Анализ фото — что на нём"),
         BotCommand(command="status",  description="Текущие настройки"),
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
         BotCommand(command="help",    description="Помощь"),
