@@ -2099,52 +2099,65 @@ def escape_md(text: str) -> str:
     return text
 
 
-# ─── Vision: Groq image analysis ──────────────────────────────────────────────
+# ─── Vision: image analysis via OpenRouter ────────────────────────────────────
 
-VISION_MODEL = "google/gemini-2.0-flash-exp:free"
+# Free vision models tried in order until one succeeds
+VISION_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+]
 
 VISION_INTRO = (
     "👁 <b>Анализ изображений</b>\n\n"
     "Просто отправьте мне любое фото — я подробно расскажу, что на нём.\n\n"
-    "Работает прямо в этом чате, никаких команд больше не нужно."
+    "Можно написать подпись к фото с вопросом, например: <i>«что это за растение?»</i>"
 )
 
 
-async def describe_image(image_bytes: bytes, user_question: str | None = None) -> str:
-    """Send image to OpenRouter Vision (Gemini) and return description."""
-    b64 = base64.b64encode(image_bytes).decode()
+async def describe_image(image_url: str, user_question: str | None = None) -> str:
+    """Try each free vision model until one returns a result."""
     question = user_question or "Подробно опиши всё, что видишь на этом изображении. Отвечай на русском языке."
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                    },
-                    {"type": "text", "text": question},
-                ],
-            }
-        ],
-        "temperature": 0.4,
-        "max_tokens": 1024,
-    }
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://t.me",
     }
-    async with aiohttp.ClientSession() as http:
-        async with http.post(
-            OPENROUTER_API_URL, json=payload, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=40)
-        ) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                raise ValueError(data.get("error", {}).get("message", f"HTTP {resp.status}"))
-            return data["choices"][0]["message"]["content"].strip()
+    last_error = "no models available"
+    for model in VISION_MODELS:
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "text", "text": question},
+                    ],
+                }
+            ],
+            "temperature": 0.4,
+            "max_tokens": 1024,
+        }
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.post(
+                    OPENROUTER_API_URL, json=payload, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=40)
+                ) as resp:
+                    data = await resp.json()
+                    if resp.status == 200:
+                        content = data["choices"][0]["message"]["content"]
+                        if content and content.strip():
+                            logger.info(f"Vision answered by {model}")
+                            return content.strip()
+                    err_msg = data.get("error", {}).get("message", f"HTTP {resp.status}")
+                    logger.warning(f"Vision model {model} failed: {err_msg}")
+                    last_error = err_msg
+        except Exception as e:
+            logger.warning(f"Vision model {model} exception: {e}")
+            last_error = str(e)
+    raise ValueError(last_error)
 
 
 @router.message(Command("vision"))
@@ -2154,29 +2167,27 @@ async def cmd_vision(message: Message):
 
 @router.message(F.photo)
 async def handle_photo(message: Message):
-    """Analyze any photo sent to the bot via Groq Vision."""
+    """Analyze any photo sent to the bot using free OpenRouter vision models."""
     user_id = message.from_user.id
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
 
     thinking = await message.answer("👁 <i>Смотрю на фото...</i>", parse_mode=ParseMode.HTML)
 
     try:
-        # Download the highest-resolution version
+        # Get direct Telegram file URL (no base64 needed)
         photo = message.photo[-1]
         file = await message.bot.get_file(photo.file_id)
-        bio = BytesIO()
-        await message.bot.download_file(file.file_path, bio)
-        image_bytes = bio.getvalue()
+        image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
 
-        # Use caption as the question if provided
+        # Use caption as the question if user wrote one
         user_question = None
         if message.caption:
             cap = message.caption.strip()
             user_question = f"{cap}\n\nОтвечай на русском языке."
 
-        description = await describe_image(image_bytes, user_question)
+        description = await describe_image(image_url, user_question)
         await thinking.delete()
-        await message.answer(description, parse_mode=ParseMode.HTML)
+        await message.answer(description)
 
     except Exception as e:
         logger.error(f"Vision error for user {user_id}: {e}")
