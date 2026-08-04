@@ -41,6 +41,7 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
 MODELS_FILE = "models_data.json"
+CASES_FILE = "cases_data.json"
 
 
 # ─── Premium emoji helper ─────────────────────────────────────────────────────
@@ -461,6 +462,131 @@ def set_model_price(model_key: str, price: int):
     save_restrictions(data)
 
 
+# ─── Cases storage ────────────────────────────────────────────────────────────
+
+def load_cases() -> dict:
+    if os.path.exists(CASES_FILE):
+        try:
+            with open(CASES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_cases(data: dict):
+    with open(CASES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def get_all_cases() -> list:
+    """Return list of all case dicts."""
+    return list(load_cases().values())
+
+def get_available_cases() -> list:
+    """Return cases that still have remaining opens."""
+    cases = load_cases()
+    result = []
+    for c in cases.values():
+        remaining = c["total_count"] - c["opened_count"]
+        if remaining > 0:
+            result.append(c)
+    return result
+
+def create_case(name: str, total_count: int, per_user_limit: int) -> dict:
+    data = load_cases()
+    case_id = f"case_{int(time.time())}"
+    data[case_id] = {
+        "id": case_id,
+        "name": name,
+        "total_count": total_count,
+        "per_user_limit": per_user_limit,
+        "opened_count": 0,
+        "opened_by": {},
+    }
+    save_cases(data)
+    return data[case_id]
+
+def delete_case(case_id: str):
+    data = load_cases()
+    data.pop(case_id, None)
+    save_cases(data)
+
+def update_case(case_id: str, **kwargs):
+    data = load_cases()
+    if case_id not in data:
+        return
+    for k, v in kwargs.items():
+        data[case_id][k] = v
+    save_cases(data)
+
+def can_user_open_case(case_id: str, user_id: int) -> tuple[bool, str]:
+    """Returns (allowed, reason). reason is '' when allowed."""
+    data = load_cases()
+    c = data.get(case_id)
+    if not c:
+        return False, "Кейс не найден."
+    remaining = c["total_count"] - c["opened_count"]
+    if remaining <= 0:
+        return False, "Все кейсы уже разобраны. Следи за обновлениями!"
+    uid = str(user_id)
+    user_opens = c["opened_by"].get(uid, 0)
+    if user_opens >= c["per_user_limit"]:
+        return False, f"Ты уже открывал этот кейс {user_opens} раз(а). Лимит: {c['per_user_limit']}."
+    return True, ""
+
+def record_case_open(case_id: str, user_id: int):
+    data = load_cases()
+    if case_id not in data:
+        return
+    uid = str(user_id)
+    data[case_id]["opened_count"] += 1
+    data[case_id]["opened_by"][uid] = data[case_id]["opened_by"].get(uid, 0) + 1
+    save_cases(data)
+
+
+# ─── Cases: prizes ────────────────────────────────────────────────────────────
+
+import random
+
+CASE_PRIZES = [
+    # (weight, prize_type, value, display_name, emoji)
+    (20, "zenotoken", 10,  "10 ZenoToken",               "🪙"),
+    (15, "zenotoken", 25,  "25 ZenoToken",               "🪙"),
+    (10, "zenotoken", 50,  "50 ZenoToken",               "🪙"),
+    (5,  "zenotoken", 100, "100 ZenoToken",              "💎"),
+    (15, "free_gens", 3,   "3 бесплатные генерации",     "🎟"),
+    (10, "free_gens", 5,   "5 бесплатных генераций",     "🎟"),
+    (5,  "free_gens", 10,  "10 бесплатных генераций",    "🎟"),
+    (5,  "vip",       1,   "VIP-статус на 24 часа",      "👑"),
+]
+
+def pick_prize() -> dict:
+    weights = [p[0] for p in CASE_PRIZES]
+    chosen = random.choices(CASE_PRIZES, weights=weights, k=1)[0]
+    return {"type": chosen[1], "value": chosen[2], "name": chosen[3], "emoji": chosen[4]}
+
+def apply_prize(user_id: int, prize: dict):
+    """Apply the won prize to the user's profile."""
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return
+    if prize["type"] == "zenotoken":
+        data[uid]["zenotoken"] = data[uid].get("zenotoken", 0) + prize["value"]
+    elif prize["type"] == "free_gens":
+        data[uid]["free_gens"] = data[uid].get("free_gens", 0) + prize["value"]
+    elif prize["type"] == "vip":
+        data[uid]["vip_until"] = time.time() + 86400  # 24 hours
+    save_users(data)
+
+def is_vip(user_id: int) -> bool:
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return False
+    vip_until = data[uid].get("vip_until", 0)
+    return vip_until > time.time()
+
+
 # ─── Sessions ─────────────────────────────────────────────────────────────────
 
 user_sessions: dict[int, dict] = {}
@@ -530,6 +656,12 @@ class AdminStates(StatesGroup):
 class ImgStates(StatesGroup):
     waiting_prompt = State()
     has_prompt = State()
+
+
+class CaseStates(StatesGroup):
+    waiting_case_name = State()
+    waiting_case_total = State()
+    waiting_case_limit = State()
 
 
 # ─── Anti-spam middleware ─────────────────────────────────────────────────────
@@ -765,6 +897,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
         [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
         [InlineKeyboardButton(text="💰 Цена за запрос", callback_data="admin:prices")],
+        [InlineKeyboardButton(text="🎁 Управление кейсами", callback_data="admin:cases")],
         [InlineKeyboardButton(text=test_label, callback_data="admin:testmode")],
         [InlineKeyboardButton(text=maint_label, callback_data="admin:maintenance")],
     ])
@@ -821,7 +954,10 @@ def styles_keyboard(current: str) -> InlineKeyboardMarkup:
 
 def start_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗣 Стиль общения", callback_data="style:menu")]
+        [
+            InlineKeyboardButton(text="🗣 Стиль общения", callback_data="style:menu"),
+            InlineKeyboardButton(text="🎁 Кейсы", callback_data="cases:list"),
+        ]
     ])
 
 
@@ -2330,6 +2466,395 @@ async def handle_message(message: Message):
             f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
             parse_mode=ParseMode.HTML
         )
+
+
+# ─── Cases: keyboards ────────────────────────────────────────────────────────
+
+def cases_list_keyboard(cases: list) -> InlineKeyboardMarkup:
+    rows = []
+    for c in cases:
+        remaining = c["total_count"] - c["opened_count"]
+        rows.append([InlineKeyboardButton(
+            text=f"🎁 {c['name']} — осталось: {remaining}",
+            callback_data=f"case:view:{c['id']}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def case_view_keyboard(case_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔓 Открыть", callback_data=f"case:open:{case_id}")],
+        [InlineKeyboardButton(text="◀️ Назад к кейсам", callback_data="cases:list")],
+    ])
+
+def admin_cases_keyboard() -> InlineKeyboardMarkup:
+    cases = get_all_cases()
+    rows = []
+    for c in cases:
+        remaining = c["total_count"] - c["opened_count"]
+        rows.append([InlineKeyboardButton(
+            text=f"🎁 {c['name']} ({remaining}/{c['total_count']})",
+            callback_data=f"acase:edit:{c['id']}",
+        )])
+    rows.append([InlineKeyboardButton(text="➕ Создать кейс", callback_data="acase:create")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить название", callback_data=f"acase:rename:{case_id}")],
+        [InlineKeyboardButton(text="🔢 Изменить количество", callback_data=f"acase:settotal:{case_id}")],
+        [InlineKeyboardButton(text="👤 Изменить лимит на пользователя", callback_data=f"acase:setlimit:{case_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить кейс", callback_data=f"acase:delete:{case_id}")],
+        [InlineKeyboardButton(text="◀️ К кейсам", callback_data="admin:cases")],
+    ])
+
+
+# ─── Cases: user handlers ─────────────────────────────────────────────────────
+
+SLOT_FRAMES = [
+    "🎰 | 🍒 🍋 🍇 | 🎰",
+    "🎰 | 🍋 🍇 🍒 | 🎰",
+    "🎰 | 🍇 🍒 🍋 | 🎰",
+    "🎰 | 💎 🍒 🌟 | 🎰",
+    "🎰 | 🍒 💎 🍒 | 🎰",
+    "🎰 | 🌟 🎁 💎 | 🎰",
+    "🎰 | 🎁 🌟 🎁 | 🎰",
+    "🎰 | 💎 🎁 💎 | 🎰",
+]
+
+@router.callback_query(F.data == "cases:list")
+async def cb_cases_list(callback: CallbackQuery, bot: Bot):
+    cases = get_available_cases()
+    if not cases:
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="🎁 <b>Кейсы</b>\n\nСейчас нет доступных кейсов. Загляни позже!",
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer()
+        return
+    await bot.send_message(
+        chat_id=callback.message.chat.id,
+        text=(
+            "🎁 <b>Доступные кейсы</b>\n\n"
+            "Выбери кейс, чтобы попытать удачу и выиграть приз!\n\n"
+            "🪙 ZenoToken • 🎟 Генерации • 👑 VIP-статус"
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=cases_list_keyboard(cases),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("case:view:"))
+async def cb_case_view(callback: CallbackQuery, bot: Bot):
+    case_id = callback.data.split(":", 2)[2]
+    data = load_cases()
+    c = data.get(case_id)
+    if not c:
+        await callback.answer("Кейс не найден.", show_alert=True)
+        return
+    remaining = c["total_count"] - c["opened_count"]
+    uid = str(callback.from_user.id)
+    user_opens = c["opened_by"].get(uid, 0)
+    await bot.send_message(
+        chat_id=callback.message.chat.id,
+        text=(
+            f"🎁 <b>{c['name']}</b>\n\n"
+            f"📦 Осталось: <b>{remaining}</b> из {c['total_count']}\n"
+            f"👤 Твои открытия: <b>{user_opens}</b> / {c['per_user_limit']}\n\n"
+            f"Нажми <b>Открыть</b>, чтобы запустить рулетку и получить случайный приз!"
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=case_view_keyboard(case_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("case:open:"))
+async def cb_case_open(callback: CallbackQuery, bot: Bot):
+    case_id = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+
+    allowed, reason = can_user_open_case(case_id, user_id)
+    if not allowed:
+        await callback.answer(reason, show_alert=True)
+        return
+
+    await callback.answer()
+
+    # Send animation message
+    anim_msg = await bot.send_message(
+        chat_id=callback.message.chat.id,
+        text="🎰 Запускаю рулетку...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Animate slot machine
+    for frame in SLOT_FRAMES:
+        await asyncio.sleep(0.35)
+        try:
+            await anim_msg.edit_text(f"<b>{frame}</b>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+    # Pick and apply prize
+    prize = pick_prize()
+    record_case_open(case_id, user_id)
+    apply_prize(user_id, prize)
+
+    # Build result message
+    if prize["type"] == "zenotoken":
+        detail = f"Начислено на твой баланс ZenoToken."
+    elif prize["type"] == "free_gens":
+        detail = f"Начислено к твоему балансу бесплатных генераций изображений."
+    else:
+        detail = f"VIP-статус активен 24 часа. Наслаждайся! 🎉"
+
+    await asyncio.sleep(0.4)
+    try:
+        await anim_msg.edit_text(
+            f"🎉 <b>Кейс открыт!</b>\n\n"
+            f"Твой приз: {prize['emoji']} <b>{prize['name']}</b>\n\n"
+            f"{detail}",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+
+# ─── Cases: admin handlers ────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:cases")
+async def cb_admin_cases(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    cases = get_all_cases()
+    text = f"🎁 <b>Управление кейсами</b>\n\nВсего кейсов: <b>{len(cases)}</b>\n\nВыберите кейс для настройки или создайте новый:"
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=admin_cases_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "acase:create")
+async def cb_acase_create(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await state.set_state(CaseStates.waiting_case_name)
+    await callback.message.edit_text(
+        "🎁 <b>Создание кейса</b>\n\nШаг 1/3: Введите <b>название</b> кейса:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(CaseStates.waiting_case_name)
+async def fsm_case_name(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    name = message.text.strip()
+    if not name:
+        await message.answer("❌ Название не может быть пустым. Введите название кейса:")
+        return
+    data = await state.get_data()
+    # Edit mode: rename existing case
+    if data.get("edit_case_field") == "name":
+        case_id = data["edit_case_id"]
+        update_case(case_id, name=name)
+        await state.clear()
+        cases_data = load_cases()
+        c = cases_data.get(case_id, {})
+        await message.answer(
+            f"✅ Название обновлено: <b>{name}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
+        )
+        return
+    # Create mode: step 1/3
+    await state.update_data(case_name=name)
+    await state.set_state(CaseStates.waiting_case_total)
+    await message.answer(
+        f"🎁 <b>Создание кейса: «{name}»</b>\n\nШаг 2/3: Введите <b>общее количество</b> кейсов (целое число):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+        ]),
+    )
+
+
+@router.message(CaseStates.waiting_case_total)
+async def fsm_case_total(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        total = int(message.text.strip())
+        if total <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое положительное число:")
+        return
+    data = await state.get_data()
+    # Edit mode: update total_count
+    if data.get("edit_case_field") == "total_count":
+        case_id = data["edit_case_id"]
+        update_case(case_id, total_count=total)
+        await state.clear()
+        cases_data = load_cases()
+        c = cases_data.get(case_id, {})
+        await message.answer(
+            f"✅ Общее количество обновлено: <b>{total}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
+        )
+        return
+    # Create mode: step 2/3
+    await state.update_data(case_total=total)
+    await state.set_state(CaseStates.waiting_case_limit)
+    await message.answer(
+        f"🎁 <b>Создание кейса: «{data['case_name']}»</b>\n\nШаг 3/3: Введите <b>лимит открытий на одного пользователя</b>:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+        ]),
+    )
+
+
+@router.message(CaseStates.waiting_case_limit)
+async def fsm_case_limit(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        limit = int(message.text.strip())
+        if limit <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое положительное число:")
+        return
+    data = await state.get_data()
+    # Edit mode: update per_user_limit
+    if data.get("edit_case_field") == "per_user_limit":
+        case_id = data["edit_case_id"]
+        update_case(case_id, per_user_limit=limit)
+        await state.clear()
+        cases_data = load_cases()
+        c = cases_data.get(case_id, {})
+        await message.answer(
+            f"✅ Лимит на пользователя обновлён: <b>{limit}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
+        )
+        return
+    # Create mode: step 3/3 — finish creation
+    await state.clear()
+    case = create_case(data["case_name"], data["case_total"], limit)
+    await message.answer(
+        f"✅ <b>Кейс создан!</b>\n\n"
+        f"🎁 Название: <b>{case['name']}</b>\n"
+        f"📦 Количество: <b>{case['total_count']}</b>\n"
+        f"👤 Лимит на пользователя: <b>{case['per_user_limit']}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cases_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("acase:edit:"))
+async def cb_acase_edit(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    case_id = callback.data.split(":", 2)[2]
+    data = load_cases()
+    c = data.get(case_id)
+    if not c:
+        await callback.answer("Кейс не найден.", show_alert=True)
+        return
+    remaining = c["total_count"] - c["opened_count"]
+    await callback.message.edit_text(
+        f"🎁 <b>{c['name']}</b>\n\n"
+        f"📦 Всего: {c['total_count']} | Открыто: {c['opened_count']} | Осталось: {remaining}\n"
+        f"👤 Лимит на пользователя: {c['per_user_limit']}\n\n"
+        f"Выберите действие:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_case_actions_keyboard(case_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("acase:delete:"))
+async def cb_acase_delete(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    case_id = callback.data.split(":", 2)[2]
+    data = load_cases()
+    name = data.get(case_id, {}).get("name", case_id)
+    delete_case(case_id)
+    await callback.message.edit_text(
+        f"🗑 Кейс <b>«{name}»</b> удалён.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cases_keyboard(),
+    )
+    await callback.answer("Удалено")
+
+
+# ─── Cases: admin inline edits (rename / settotal / setlimit) ─────────────────
+
+@router.callback_query(F.data.startswith("acase:rename:"))
+async def cb_acase_rename(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    case_id = callback.data.split(":", 2)[2]
+    await state.update_data(edit_case_id=case_id, edit_case_field="name")
+    await state.set_state(CaseStates.waiting_case_name)
+    await callback.message.edit_text(
+        "✏️ Введите новое <b>название</b> кейса:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("acase:settotal:"))
+async def cb_acase_settotal(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    case_id = callback.data.split(":", 2)[2]
+    await state.update_data(edit_case_id=case_id, edit_case_field="total_count")
+    await state.set_state(CaseStates.waiting_case_total)
+    await callback.message.edit_text(
+        "🔢 Введите новое <b>общее количество</b> кейсов:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("acase:setlimit:"))
+async def cb_acase_setlimit(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    case_id = callback.data.split(":", 2)[2]
+    await state.update_data(edit_case_id=case_id, edit_case_field="per_user_limit")
+    await state.set_state(CaseStates.waiting_case_limit)
+    await callback.message.edit_text(
+        "👤 Введите новый <b>лимит открытий на пользователя</b>:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}")]
+        ]),
+    )
+    await callback.answer()
 
 
 # ─── Global error handler ─────────────────────────────────────────────────────
