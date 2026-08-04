@@ -2712,20 +2712,29 @@ async def handle_message(message: Message):
 
 # ─── Cases: keyboards ────────────────────────────────────────────────────────
 
+def progress_bar(current: int, total: int, length: int = 8) -> str:
+    if total == 0:
+        return "░" * length
+    filled = round((current / total) * length)
+    filled = max(0, min(filled, length))
+    return "█" * filled + "░" * (length - filled)
+
 def cases_list_keyboard(cases: list) -> InlineKeyboardMarkup:
     rows = []
     for c in cases:
         remaining = c["total_count"] - c["opened_count"]
+        pct = int(remaining / c["total_count"] * 100) if c["total_count"] else 0
+        bar = progress_bar(remaining, c["total_count"], 6)
         rows.append([InlineKeyboardButton(
-            text=f"🎁 {c['name']} — осталось: {remaining}",
+            text=f"📦 {c['name']}  {bar} {remaining}/{c['total_count']}",
             callback_data=f"case:view:{c['id']}",
         )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def case_view_keyboard(case_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔓 Открыть", callback_data=f"case:open:{case_id}")],
-        [InlineKeyboardButton(text="◀️ Назад к кейсам", callback_data="cases:list")],
+        [InlineKeyboardButton(text="🎰 Открыть кейс", callback_data=f"case:open:{case_id}")],
+        [InlineKeyboardButton(text="‹ Все кейсы", callback_data="cases:list")],
     ])
 
 def admin_cases_keyboard() -> InlineKeyboardMarkup:
@@ -2753,16 +2762,26 @@ def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
 
 # ─── Cases: user handlers ─────────────────────────────────────────────────────
 
-SLOT_FRAMES = [
-    "🎰 | 🍒 🍋 🍇 | 🎰",
-    "🎰 | 🍋 🍇 🍒 | 🎰",
-    "🎰 | 🍇 🍒 🍋 | 🎰",
-    "🎰 | 💎 🍒 🌟 | 🎰",
-    "🎰 | 🍒 💎 🍒 | 🎰",
-    "🎰 | 🌟 🎁 💎 | 🎰",
-    "🎰 | 🎁 🌟 🎁 | 🎰",
-    "🎰 | 💎 🎁 💎 | 🎰",
-]
+_REEL_POOL = ["🍒", "🍋", "🍇", "🍊", "🍉", "⭐", "💫", "🔥"]
+
+def _reel(emojis: list[str] | None = None) -> str:
+    pool = emojis or _REEL_POOL
+    return " │ ".join(random.choices(pool, k=3))
+
+def _slot_frame(row: str, stage: str) -> str:
+    return (
+        f"╔═══════════════╗\n"
+        f"║  {row}  ║\n"
+        f"╚═══════════════╝\n\n"
+        f"<i>{stage}</i>"
+    )
+
+PRIZE_REEL_EMOJI = {
+    "zenotoken": {10: "🪙", 25: "🪙", 50: "💎", 100: "💎"},
+    "free_gens":  {3: "🎟", 5: "🎟", 10: "🌟"},
+    "vip":        {1: "👑"},
+}
+
 
 @router.callback_query(F.data == "cases:list")
 async def cb_cases_list(callback: CallbackQuery, bot: Bot):
@@ -2770,18 +2789,33 @@ async def cb_cases_list(callback: CallbackQuery, bot: Bot):
     if not cases:
         await bot.send_message(
             chat_id=callback.message.chat.id,
-            text="🎁 <b>Кейсы</b>\n\nСейчас нет доступных кейсов. Загляни позже!",
+            text=(
+                "📦 <b>Зона кейсов</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━\n"
+                "😔 Сейчас кейсов нет — все разобрали!\n\n"
+                "Загляни позже, скоро появятся новые 👀"
+            ),
             parse_mode=ParseMode.HTML,
         )
         await callback.answer()
         return
+
+    lines = ["📦 <b>З О Н А  К Е Й С О В</b>", "", "━━━━━━━━━━━━━━━━━━━"]
+    for c in cases:
+        remaining = c["total_count"] - c["opened_count"]
+        bar = progress_bar(remaining, c["total_count"], 8)
+        lines.append(f"  {bar}  <b>{c['name']}</b> — {remaining} шт.")
+    lines += [
+        "━━━━━━━━━━━━━━━━━━━",
+        "",
+        "🪙 ZenoToken  •  🎟 Генерации  •  👑 VIP",
+        "",
+        "👇 Выбери кейс и испытай удачу:",
+    ]
+
     await bot.send_message(
         chat_id=callback.message.chat.id,
-        text=(
-            "🎁 <b>Доступные кейсы</b>\n\n"
-            "Выбери кейс, чтобы попытать удачу и выиграть приз!\n\n"
-            "🪙 ZenoToken • 🎟 Генерации • 👑 VIP-статус"
-        ),
+        text="\n".join(lines),
         parse_mode=ParseMode.HTML,
         reply_markup=cases_list_keyboard(cases),
     )
@@ -2799,14 +2833,33 @@ async def cb_case_view(callback: CallbackQuery, bot: Bot):
     remaining = c["total_count"] - c["opened_count"]
     uid = str(callback.from_user.id)
     user_opens = c["opened_by"].get(uid, 0)
+    opens_left = c["per_user_limit"] - user_opens
+    bar = progress_bar(remaining, c["total_count"], 10)
+
+    status_line = (
+        f"✅ У тебя есть <b>{opens_left}</b> попыт." if opens_left > 0
+        else "🚫 Ты исчерпал все попытки для этого кейса"
+    )
+
+    text = (
+        f"╔══════════════════╗\n"
+        f"  📦  <b>{c['name'].upper()}</b>\n"
+        f"╚══════════════════╝\n\n"
+        f"<b>Наполненность:</b>\n"
+        f"{bar}  <b>{remaining}</b> из {c['total_count']}\n\n"
+        f"<b>Твои попытки:</b>  {user_opens} / {c['per_user_limit']}\n"
+        f"{status_line}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <b>Возможные призы:</b>\n"
+        f"  🪙  10 · 25 · 50 · 100 ZenoToken\n"
+        f"  🎟  3 · 5 · 10 генераций изображений\n"
+        f"  👑  VIP-статус на 24 часа\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Нажми <b>🎰 Открыть кейс</b> и узнай свою судьбу!"
+    )
     await bot.send_message(
         chat_id=callback.message.chat.id,
-        text=(
-            f"🎁 <b>{c['name']}</b>\n\n"
-            f"📦 Осталось: <b>{remaining}</b> из {c['total_count']}\n"
-            f"👤 Твои открытия: <b>{user_opens}</b> / {c['per_user_limit']}\n\n"
-            f"Нажми <b>Открыть</b>, чтобы запустить рулетку и получить случайный приз!"
-        ),
+        text=text,
         parse_mode=ParseMode.HTML,
         reply_markup=case_view_keyboard(case_id),
     )
@@ -2823,42 +2876,93 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
         await callback.answer(reason, show_alert=True)
         return
 
-    await callback.answer()
+    # Pick prize BEFORE animation so last frame can match
+    prize = pick_prize()
+    prize_emoji = PRIZE_REEL_EMOJI.get(prize["type"], {}).get(prize["value"], prize["emoji"])
 
-    # Send animation message
+    await callback.answer("🎰 Крутим барабаны...")
+
     anim_msg = await bot.send_message(
         chat_id=callback.message.chat.id,
-        text="🎰 Запускаю рулетку...",
+        text=_slot_frame(_reel(), "⏳ Подготовка..."),
         parse_mode=ParseMode.HTML,
     )
 
-    # Animate slot machine
-    for frame in SLOT_FRAMES:
-        await asyncio.sleep(0.35)
+    # Stage 1 — fast spin (0.22 s)
+    for _ in range(5):
+        await asyncio.sleep(0.22)
         try:
-            await anim_msg.edit_text(f"<b>{frame}</b>", parse_mode=ParseMode.HTML)
+            await anim_msg.edit_text(
+                _slot_frame(_reel(), "⚡ Барабаны крутятся..."),
+                parse_mode=ParseMode.HTML,
+            )
         except Exception:
             pass
 
-    # Pick and apply prize
-    prize = pick_prize()
+    # Stage 2 — slowing (0.38 s)
+    slow_pool = _REEL_POOL + [prize_emoji]
+    for i in range(4):
+        await asyncio.sleep(0.38)
+        try:
+            await anim_msg.edit_text(
+                _slot_frame(_reel(slow_pool), "🔄 Замедляемся..."),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+    # Stage 3 — almost stopped (0.55 s), 2 reels lock
+    await asyncio.sleep(0.55)
+    try:
+        await anim_msg.edit_text(
+            _slot_frame(f"{prize_emoji} │ {random.choice(_REEL_POOL)} │ {prize_emoji}", "⏸ Стоп..."),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+    # Stage 4 — all locked on prize emoji
+    await asyncio.sleep(0.65)
+    try:
+        await anim_msg.edit_text(
+            _slot_frame(f"{prize_emoji} │ {prize_emoji} │ {prize_emoji}", "🔒 Результат!"),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+    # Apply prize & record
     record_case_open(case_id, user_id)
     apply_prize(user_id, prize)
 
-    # Build result message
+    # Build post-apply balance line
+    profile = get_user_profile(user_id)
     if prize["type"] == "zenotoken":
-        detail = f"Начислено на твой баланс ZenoToken."
+        detail = "Начислено прямо на твой баланс."
+        balance_line = f"💰 Баланс ZenoToken: <b>{profile.get('zenotoken', 0)} 🪙</b>"
     elif prize["type"] == "free_gens":
-        detail = f"Начислено к твоему балансу бесплатных генераций изображений."
+        detail = "Добавлено к балансу генераций изображений."
+        balance_line = f"🎟 Генерации: <b>{profile.get('free_gens', 0)}</b>"
     else:
-        detail = f"VIP-статус активен 24 часа. Наслаждайся! 🎉"
+        rem = get_vip_remaining(user_id)
+        h, m = rem // 3600, (rem % 3600) // 60
+        detail = "VIP активен прямо сейчас!"
+        balance_line = f"👑 VIP истекает через: <b>{h}ч {m}м</b>"
 
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.5)
     try:
         await anim_msg.edit_text(
-            f"🎉 <b>Кейс открыт!</b>\n\n"
-            f"Твой приз: {prize['emoji']} <b>{prize['name']}</b>\n\n"
-            f"{detail}",
+            f"╔══════════════════╗\n"
+            f"  🎊  <b>П О З Д Р А В Л Я Е М !</b>\n"
+            f"╚══════════════════╝\n\n"
+            f"╔═══════════════╗\n"
+            f"║  {prize_emoji} │ {prize_emoji} │ {prize_emoji}  ║\n"
+            f"╚═══════════════╝\n\n"
+            f"🏆 <b>Твой приз:</b>  {prize['emoji']} <b>{prize['name']}</b>\n\n"
+            f"▸ {detail}\n"
+            f"▸ {balance_line}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Хочешь ещё? Жми 🎁 Кейсы!</i>",
             parse_mode=ParseMode.HTML,
         )
     except Exception:
