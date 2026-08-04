@@ -2371,6 +2371,117 @@ async def handle_photo(message: Message):
             await message.answer("❌ Не удалось проанализировать фото. Попробуйте ещё раз.")
 
 
+# ─── Cases: FSM message handlers (must be before generic F.text handler) ─────
+
+@router.message(CaseStates.waiting_case_name)
+async def fsm_case_name(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    name = message.text.strip()
+    if not name:
+        await message.answer("❌ Название не может быть пустым. Введите название кейса:")
+        return
+    data = await state.get_data()
+    # Edit mode: rename existing case
+    if data.get("edit_case_field") == "name":
+        case_id = data["edit_case_id"]
+        update_case(case_id, name=name)
+        await state.clear()
+        cases_data = load_cases()
+        c = cases_data.get(case_id, {})
+        await message.answer(
+            f"✅ Название обновлено: <b>{name}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
+        )
+        return
+    # Create mode: step 1/3
+    await state.update_data(case_name=name)
+    await state.set_state(CaseStates.waiting_case_total)
+    await message.answer(
+        f"🎁 <b>Создание кейса: «{name}»</b>\n\nШаг 2/3: Введите <b>общее количество</b> кейсов (целое число):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+        ]),
+    )
+
+
+@router.message(CaseStates.waiting_case_total)
+async def fsm_case_total(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        total = int(message.text.strip())
+        if total <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое положительное число:")
+        return
+    data = await state.get_data()
+    # Edit mode: update total_count
+    if data.get("edit_case_field") == "total_count":
+        case_id = data["edit_case_id"]
+        update_case(case_id, total_count=total)
+        await state.clear()
+        cases_data = load_cases()
+        c = cases_data.get(case_id, {})
+        await message.answer(
+            f"✅ Общее количество обновлено: <b>{total}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
+        )
+        return
+    # Create mode: step 2/3
+    await state.update_data(case_total=total)
+    await state.set_state(CaseStates.waiting_case_limit)
+    await message.answer(
+        f"🎁 <b>Создание кейса: «{data['case_name']}»</b>\n\nШаг 3/3: Введите <b>лимит открытий на одного пользователя</b>:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+        ]),
+    )
+
+
+@router.message(CaseStates.waiting_case_limit)
+async def fsm_case_limit(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        limit = int(message.text.strip())
+        if limit <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое положительное число:")
+        return
+    data = await state.get_data()
+    # Edit mode: update per_user_limit
+    if data.get("edit_case_field") == "per_user_limit":
+        case_id = data["edit_case_id"]
+        update_case(case_id, per_user_limit=limit)
+        await state.clear()
+        cases_data = load_cases()
+        c = cases_data.get(case_id, {})
+        await message.answer(
+            f"✅ Лимит на пользователя обновлён: <b>{limit}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
+        )
+        return
+    # Create mode: step 3/3 — finish creation
+    await state.clear()
+    case = create_case(data["case_name"], data["case_total"], limit)
+    await message.answer(
+        f"✅ <b>Кейс создан!</b>\n\n"
+        f"🎁 Название: <b>{case['name']}</b>\n"
+        f"📦 Количество: <b>{case['total_count']}</b>\n"
+        f"👤 Лимит на пользователя: <b>{case['per_user_limit']}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cases_keyboard(),
+    )
+
+
 # ─── Message handler ──────────────────────────────────────────────────────────
 
 @router.message(F.text)
@@ -2650,115 +2761,6 @@ async def cb_acase_create(callback: CallbackQuery, state: FSMContext):
         ]),
     )
     await callback.answer()
-
-
-@router.message(CaseStates.waiting_case_name)
-async def fsm_case_name(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    name = message.text.strip()
-    if not name:
-        await message.answer("❌ Название не может быть пустым. Введите название кейса:")
-        return
-    data = await state.get_data()
-    # Edit mode: rename existing case
-    if data.get("edit_case_field") == "name":
-        case_id = data["edit_case_id"]
-        update_case(case_id, name=name)
-        await state.clear()
-        cases_data = load_cases()
-        c = cases_data.get(case_id, {})
-        await message.answer(
-            f"✅ Название обновлено: <b>{name}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
-        )
-        return
-    # Create mode: step 1/3
-    await state.update_data(case_name=name)
-    await state.set_state(CaseStates.waiting_case_total)
-    await message.answer(
-        f"🎁 <b>Создание кейса: «{name}»</b>\n\nШаг 2/3: Введите <b>общее количество</b> кейсов (целое число):",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
-        ]),
-    )
-
-
-@router.message(CaseStates.waiting_case_total)
-async def fsm_case_total(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        total = int(message.text.strip())
-        if total <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Введите целое положительное число:")
-        return
-    data = await state.get_data()
-    # Edit mode: update total_count
-    if data.get("edit_case_field") == "total_count":
-        case_id = data["edit_case_id"]
-        update_case(case_id, total_count=total)
-        await state.clear()
-        cases_data = load_cases()
-        c = cases_data.get(case_id, {})
-        await message.answer(
-            f"✅ Общее количество обновлено: <b>{total}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
-        )
-        return
-    # Create mode: step 2/3
-    await state.update_data(case_total=total)
-    await state.set_state(CaseStates.waiting_case_limit)
-    await message.answer(
-        f"🎁 <b>Создание кейса: «{data['case_name']}»</b>\n\nШаг 3/3: Введите <b>лимит открытий на одного пользователя</b>:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
-        ]),
-    )
-
-
-@router.message(CaseStates.waiting_case_limit)
-async def fsm_case_limit(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        limit = int(message.text.strip())
-        if limit <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Введите целое положительное число:")
-        return
-    data = await state.get_data()
-    # Edit mode: update per_user_limit
-    if data.get("edit_case_field") == "per_user_limit":
-        case_id = data["edit_case_id"]
-        update_case(case_id, per_user_limit=limit)
-        await state.clear()
-        cases_data = load_cases()
-        c = cases_data.get(case_id, {})
-        await message.answer(
-            f"✅ Лимит на пользователя обновлён: <b>{limit}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_case_actions_keyboard(case_id) if c else admin_cases_keyboard(),
-        )
-        return
-    # Create mode: step 3/3 — finish creation
-    await state.clear()
-    case = create_case(data["case_name"], data["case_total"], limit)
-    await message.answer(
-        f"✅ <b>Кейс создан!</b>\n\n"
-        f"🎁 Название: <b>{case['name']}</b>\n"
-        f"📦 Количество: <b>{case['total_count']}</b>\n"
-        f"👤 Лимит на пользователя: <b>{case['per_user_limit']}</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=admin_cases_keyboard(),
-    )
 
 
 @router.callback_query(F.data.startswith("acase:edit:"))
