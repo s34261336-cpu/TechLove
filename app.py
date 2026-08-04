@@ -586,6 +586,57 @@ def is_vip(user_id: int) -> bool:
     vip_until = data[uid].get("vip_until", 0)
     return vip_until > time.time()
 
+def get_vip_remaining(user_id: int) -> int:
+    """Returns seconds remaining on VIP, or 0."""
+    data = load_users()
+    uid = str(user_id)
+    vip_until = data.get(uid, {}).get("vip_until", 0)
+    remaining = int(vip_until - time.time())
+    return max(0, remaining)
+
+
+# ─── Image generation pricing ─────────────────────────────────────────────────
+
+def get_img_gen_price() -> int:
+    """Returns how many free_gens one image generation costs. 0 = free for all."""
+    data = load_restrictions()
+    return data.get("_img_gen_price", 1)
+
+def set_img_gen_price(price: int):
+    data = load_restrictions()
+    data["_img_gen_price"] = max(0, price)
+    save_restrictions(data)
+
+def get_user_free_gens(user_id: int) -> int:
+    data = load_users()
+    return data.get(str(user_id), {}).get("free_gens", 0)
+
+def deduct_user_free_gens(user_id: int, amount: int) -> tuple[bool, int]:
+    """Returns (success, new_balance)."""
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return False, 0
+    current = data[uid].get("free_gens", 0)
+    if current < amount:
+        return False, current
+    data[uid]["free_gens"] = current - amount
+    save_users(data)
+    return True, data[uid]["free_gens"]
+
+def img_gen_info_text(user_id: int) -> str:
+    """Status line shown in the image generator UI."""
+    if is_vip(user_id):
+        rem = get_vip_remaining(user_id)
+        h = rem // 3600
+        m = (rem % 3600) // 60
+        return f"\n\n👑 <b>VIP:</b> генерации бесплатны! (истекает через {h}ч {m}м)"
+    price = get_img_gen_price()
+    if price == 0:
+        return "\n\n🎟 Генерации сейчас бесплатны."
+    gens = get_user_free_gens(user_id)
+    return f"\n\n🎟 Стоимость: <b>{price} генерац.</b> | Ваш баланс: <b>{gens} 🎟</b>"
+
 
 # ─── Sessions ─────────────────────────────────────────────────────────────────
 
@@ -651,6 +702,7 @@ class AdminStates(StatesGroup):
     waiting_maintenance_duration = State()
     waiting_maintenance_reason = State()
     waiting_set_price = State()
+    waiting_img_gen_price = State()
 
 
 class ImgStates(StatesGroup):
@@ -706,9 +758,14 @@ class AntiSpamMiddleware(BaseMiddleware):
 
         now = time.time()
 
+        # VIP users get relaxed anti-spam limits
+        vip = is_vip(user_id)
+        spam_limit = SPAM_LIMIT * 2 if vip else SPAM_LIMIT
+        spam_cooldown = SPAM_COOLDOWN // 2 if vip else SPAM_COOLDOWN
+
         warned_at = user_spam_warned.get(user_id)
         if warned_at:
-            remaining = int(SPAM_COOLDOWN - (now - warned_at))
+            remaining = int(spam_cooldown - (now - warned_at))
             if remaining > 0:
                 if isinstance(event, Message):
                     await event.answer(
@@ -726,17 +783,17 @@ class AntiSpamMiddleware(BaseMiddleware):
         times.append(now)
         user_message_times[user_id] = times
 
-        if len(times) >= SPAM_LIMIT:
+        if len(times) >= spam_limit:
             user_spam_warned[user_id] = now
             user_message_times[user_id] = []
             if isinstance(event, Message):
                 await event.answer(
-                    f"🚫 <b>Слишком много запросов!</b>\n\nНе спамь — подожди <b>{SPAM_COOLDOWN} сек.</b>",
+                    f"🚫 <b>Слишком много запросов!</b>\n\nНе спамь — подожди <b>{spam_cooldown} сек.</b>",
                     parse_mode=ParseMode.HTML,
                 )
             elif isinstance(event, CallbackQuery):
                 await event.answer(
-                    f"🚫 Слишком много запросов! Подожди {SPAM_COOLDOWN} сек.",
+                    f"🚫 Слишком много запросов! Подожди {spam_cooldown} сек.",
                     show_alert=True,
                 )
             return
@@ -897,6 +954,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
         [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
         [InlineKeyboardButton(text="💰 Цена за запрос", callback_data="admin:prices")],
+        [InlineKeyboardButton(text="🎟 Цена за генерацию", callback_data="admin:imgprice")],
         [InlineKeyboardButton(text="🎁 Управление кейсами", callback_data="admin:cases")],
         [InlineKeyboardButton(text=test_label, callback_data="admin:testmode")],
         [InlineKeyboardButton(text=maint_label, callback_data="admin:maintenance")],
@@ -1114,18 +1172,33 @@ async def cmd_profile(message: Message):
     session = get_session(user.id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
+    vip = is_vip(user.id)
+    vip_line = ""
+    if vip:
+        rem = get_vip_remaining(user.id)
+        h, m = rem // 3600, (rem % 3600) // 60
+        vip_line = f"\n👑 <b>VIP-статус активен</b> — истекает через {h}ч {m}м"
+    free_gens = profile.get("free_gens", 0)
     text = (
-        f"👤 <b>Профиль</b>\n\n"
+        f"{'👑' if vip else '👤'} <b>Профиль</b>{vip_line}\n\n"
         f"👤 Имя: <b>{profile['first_name']}</b>\n"
         f"🔗 Username: <b>{username_str}</b>\n"
         f"🆔 ID: <code>{profile['user_id']}</code>\n\n"
-        f"🪙 <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n\n"
+        f"🪙 <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n"
+        f"🎟 <b>Генерации: {free_gens}</b>\n\n"
         f"💬 Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
         f"📅 Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
         f"🕐 Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
         f"🤖 Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
         f"🎭 Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
     )
+    if vip:
+        text += (
+            "\n\n👑 <b>VIP-привилегии:</b>\n"
+            "• 🎨 Генерации изображений бесплатны\n"
+            "• 🤖 Все платные модели бесплатны\n"
+            "• ⚡ Антиспам вдвое мягче"
+        )
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
@@ -1348,6 +1421,47 @@ async def fsm_set_price(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="💰 К ценам", callback_data="admin:prices")],
             [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
         ])
+    )
+
+
+@router.callback_query(F.data == "admin:imgprice")
+async def cb_admin_imgprice(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    current = get_img_gen_price()
+    price_str = "🆓 Бесплатно" if current == 0 else f"{current} 🎟 за генерацию"
+    await state.set_state(AdminStates.waiting_img_gen_price)
+    await callback.message.edit_text(
+        f"🎟 <b>Цена за генерацию изображения</b>\n\n"
+        f"Текущая цена: <b>{price_str}</b>\n\n"
+        f"Введите новую цену в генерациях (0 = бесплатно для всех):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_img_gen_price)
+async def fsm_img_gen_price(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        price = int(message.text.strip())
+        if price < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое число ≥ 0 (например: 0, 1, 2)", reply_markup=admin_cancel_keyboard())
+        return
+    set_img_gen_price(price)
+    await state.clear()
+    price_str = "🆓 Бесплатно для всех" if price == 0 else f"{price} 🎟 за генерацию"
+    await message.answer(
+        f"✅ <b>Цена обновлена!</b>\n\nГенерация изображения: <b>{price_str}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
+        ]),
     )
 
 
@@ -1996,7 +2110,8 @@ async def cmd_img(message: Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")]
     ])
-    await message.answer(IMG_WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb)
+    text = IMG_WELCOME_TEXT + img_gen_info_text(message.from_user.id)
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
 @router.callback_query(F.data == "img:prompt")
@@ -2082,8 +2197,20 @@ async def translate_prompt(prompt: str) -> str:
 
 @router.callback_query(ImgStates.has_prompt, F.data == "img:generate")
 async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
     data = await state.get_data()
     prompt = data.get("current_prompt", "")
+
+    # Check free_gens balance (admin and VIP bypass)
+    price = get_img_gen_price()
+    if price > 0 and not is_admin(user_id) and not is_vip(user_id):
+        gens = get_user_free_gens(user_id)
+        if gens < price:
+            await callback.answer(
+                f"❌ Недостаточно генераций! Нужно {price} 🎟, у тебя {gens}. Открой кейс — там можно выиграть генерации.",
+                show_alert=True,
+            )
+            return
 
     await callback.answer("🎨 Создаю...")
     await callback.message.edit_text(
@@ -2132,6 +2259,10 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         if not img_bytes:
             raise ValueError(last_err or "all attempts failed")
 
+        # Deduct free_gens only on success (admin/VIP exempt)
+        if price > 0 and not is_admin(user_id) and not is_vip(user_id):
+            deduct_user_free_gens(user_id, price)
+
         photo = BufferedInputFile(img_bytes, filename="image.jpg")
         await callback.message.answer_photo(
             photo,
@@ -2144,7 +2275,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
         ])
         await callback.message.edit_text(
-            f"{IMG_WELCOME_TEXT}\n\n<b>Последний промт:</b>\n<i>{prompt}</i>",
+            f"{IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n<b>Последний промт:</b>\n<i>{prompt}</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_menu
         )
@@ -2514,9 +2645,9 @@ async def handle_message(message: Message):
             )
             return
 
-    # ZenoToken check & deduction for paid models (admin exempt)
+    # ZenoToken check & deduction for paid models (admin and VIP exempt)
     token_price = get_model_price(session["model"])
-    if token_price > 0 and not is_admin(user_id):
+    if token_price > 0 and not is_admin(user_id) and not is_vip(user_id):
         profile = get_user_profile(user_id)
         balance = profile.get("zenotoken", 0)
         if balance < token_price:
