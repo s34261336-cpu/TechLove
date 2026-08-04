@@ -1,12 +1,12 @@
 {
-  "case_1785852526": {
-    "id": "case_1785852526",
+  "case_1785853778": {
+    "id": "case_1785853778",
     "name": "Test",
-    "total_count": 10,
-    "per_user_limit": 20,
-    "opened_count": 4,
+    "total_count": 5,
+    "per_user_limit": 7,
+    "opened_count": 2,
     "opened_by": {
-      "5814345235": 4
+      "5814345235": 2
     }
   }
 }
