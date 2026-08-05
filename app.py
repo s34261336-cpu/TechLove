@@ -549,14 +549,15 @@ import random
 
 CASE_PRIZES = [
     # (weight, prize_type, value, display_name, emoji)
-    (20, "zenotoken", 10,  "10 ZenoToken",               "🪙"),
-    (15, "zenotoken", 25,  "25 ZenoToken",               "🪙"),
-    (10, "zenotoken", 50,  "50 ZenoToken",               "🪙"),
-    (5,  "zenotoken", 100, "100 ZenoToken",              "💎"),
-    (15, "free_gens", 3,   "3 бесплатные генерации",     "🎟"),
-    (10, "free_gens", 5,   "5 бесплатных генераций",     "🎟"),
-    (5,  "free_gens", 10,  "10 бесплатных генераций",    "🎟"),
-    (5,  "vip",       1,   "VIP-статус на 24 часа",      "👑"),
+    (40, "nothing",   0,   "Пусто — не повезло",         "💨"),
+    (8,  "zenotoken", 10,  "10 ZenoToken",               "🪙"),
+    (4,  "zenotoken", 25,  "25 ZenoToken",               "🪙"),
+    (2,  "zenotoken", 50,  "50 ZenoToken",               "🪙"),
+    (1,  "zenotoken", 100, "100 ZenoToken",              "💎"),
+    (5,  "free_gens", 3,   "3 бесплатные генерации",     "🎟"),
+    (2,  "free_gens", 5,   "5 бесплатных генераций",     "🎟"),
+    (1,  "free_gens", 10,  "10 бесплатных генераций",    "🎟"),
+    (2,  "vip",       1,   "VIP-статус на 24 часа",      "👑"),
 ]
 
 def pick_prize() -> dict:
@@ -566,6 +567,8 @@ def pick_prize() -> dict:
 
 def apply_prize(user_id: int, prize: dict):
     """Apply the won prize to the user's profile."""
+    if prize["type"] == "nothing":
+        return  # no prize to apply
     data = load_users()
     uid = str(user_id)
     if uid not in data:
@@ -826,7 +829,8 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="🤖 Модель"), KeyboardButton(text="🎭 Роль")],
         [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
-        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="ℹ️ Помощь")],
     ]
     if user_id == ADMIN_ID:
         buttons.append([KeyboardButton(text="🛡 Админ панель")])
@@ -1036,12 +1040,16 @@ async def cmd_start(message: Message):
     style = STYLES[session["style"]]
     caption = (
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
-        f"Я — ИИ-ассистент с доступом к лучшим <b>бесплатным</b> языковым моделям (Groq).\n\n"
-        f"📌 <b>Текущие настройки:</b>\n"
+        f"Я — <b>Zeno AI</b> — твой личный ИИ-ассистент с доступом к мощным языковым моделям.\n\n"
+        f"🤖 Отвечаю на любые вопросы\n"
+        f"🎨 Рисую картинки по описанию\n"
+        f"👁 Анализирую фотографии\n"
+        f"🎭 Меняю роли и стиль общения\n\n"
+        f"📌 <b>Сейчас активно:</b>\n"
         f"• Модель: {model['emoji_html']} {model['name']}\n"
         f"• Роль: {role['emoji_html']} {role['name']}\n"
         f"• Стиль: {style['emoji']} {style['name']}\n\n"
-        f"Просто напиши мне сообщение — и я отвечу!"
+        f"✍️ Просто напиши сообщение — и я отвечу!"
     )
     photo = FSInputFile("welcome_photo.jpg")
     await message.answer_photo(
@@ -1075,12 +1083,16 @@ async def cmd_help(message: Message):
         f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
-        "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n\n"
+        "🎨 <b>Нейро-фото</b> — генерация картинок по описанию\n"
+        "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
+        "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
+        "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
         "📝 <b>Команды:</b>\n"
         "/start — главное меню\n"
         "/new — новый диалог\n"
         "/model — сменить модель\n"
         "/role — сменить роль\n"
+        "/img — генератор изображений\n"
         "/status — текущие настройки\n"
         "/profile — мой профиль\n"
         "/help — помощь"
@@ -2105,10 +2117,11 @@ IMG_WELCOME_TEXT = (
 
 
 @router.message(Command("img"))
+@router.message(F.text == "🎨 Нейро-фото")
 async def cmd_img(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")]
+        [InlineKeyboardButton(text="✏️ Ввести описание", callback_data="img:prompt")]
     ])
     text = IMG_WELCOME_TEXT + img_gen_info_text(message.from_user.id)
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -2228,10 +2241,18 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
         # Try flux model up to 3 times, then fallback to turbo
         attempts = [
-            f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed}",
+            f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed}&enhance=true",
             f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed+1}",
             f"https://image.pollinations.ai/prompt/{encoded}?model=turbo&width=768&height=768&nologo=true&seed={base_seed}",
         ]
+
+        _IMG_HEADERS = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://pollinations.ai/",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        # Magic bytes for supported image formats
+        _IMG_MAGIC = (b'\xff\xd8', b'\x89P', b'RIFF', b'GIF8')
 
         img_bytes = None
         last_err = ""
@@ -2242,16 +2263,30 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                     parse_mode=ParseMode.HTML
                 )
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    async with session.get(
+                        url,
+                        headers=_IMG_HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=90, connect=10),
+                        allow_redirects=True,
+                    ) as resp:
                         if resp.status == 200:
+                            content_type = resp.headers.get("Content-Type", "")
                             data = await resp.read()
-                            # Make sure it's actually an image, not an error JSON
-                            if len(data) > 1000 and data[:2] in (b'\xff\xd8', b'\x89P'):
+                            # Accept by content-type first, then by magic bytes
+                            is_image = "image/" in content_type or (
+                                len(data) > 500 and data[:4] in _IMG_MAGIC
+                            )
+                            if is_image and len(data) > 500:
                                 img_bytes = data
                                 break
-                            last_err = f"invalid image data (attempt {attempt_num})"
+                            last_err = f"не картинка (content-type: {content_type}, размер: {len(data)})"
                         else:
-                            last_err = f"HTTP {resp.status}"
+                            body = ""
+                            try:
+                                body = (await resp.text())[:200]
+                            except Exception:
+                                pass
+                            last_err = f"HTTP {resp.status}: {body}"
             except Exception as e:
                 last_err = str(e)
                 logger.warning(f"Pollinations attempt {attempt_num} failed: {e}")
@@ -2672,6 +2707,7 @@ async def handle_message(message: Message):
             )
             return
 
+    await message.bot.send_chat_action(message.chat.id, "typing")
     thinking_msg = await message.answer(
         f"⏳ <i>{model['emoji_html']} {model['name']} думает...</i>",
         parse_mode=ParseMode.HTML
@@ -2777,6 +2813,7 @@ def _slot_frame(row: str, stage: str) -> str:
     )
 
 PRIZE_REEL_EMOJI = {
+    "nothing":    {0: "💨"},
     "zenotoken": {10: "🪙", 25: "🪙", 50: "💎", 100: "💎"},
     "free_gens":  {3: "🎟", 5: "🎟", 10: "🌟"},
     "vip":        {1: "👑"},
@@ -2851,11 +2888,12 @@ async def cb_case_view(callback: CallbackQuery, bot: Bot):
         f"{status_line}\n\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"💡 <b>Возможные призы:</b>\n"
+        f"  💨  Пусто (часто)\n"
         f"  🪙  10 · 25 · 50 · 100 ZenoToken\n"
         f"  🎟  3 · 5 · 10 генераций изображений\n"
-        f"  👑  VIP-статус на 24 часа\n"
+        f"  👑  VIP-статус на 24 часа (редко)\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Нажми <b>🎰 Открыть кейс</b> и узнай свою судьбу!"
+        f"Нажми <b>🎰 Открыть кейс</b> и испытай удачу!"
     )
     await bot.send_message(
         chat_id=callback.message.chat.id,
@@ -2937,6 +2975,25 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
 
     # Build post-apply balance line
     profile = get_user_profile(user_id)
+    if prize["type"] == "nothing":
+        await asyncio.sleep(0.5)
+        try:
+            await anim_msg.edit_text(
+                f"╔══════════════════╗\n"
+                f"  😔  <b>Н Е  П О В Е З Л О</b>\n"
+                f"╚══════════════════╝\n\n"
+                f"╔═══════════════╗\n"
+                f"║  💨 │ 💨 │ 💨  ║\n"
+                f"╚═══════════════╝\n\n"
+                f"На этот раз кейс оказался пустым.\n\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>Попробуй ещё раз, удача где-то рядом! 🎁</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
     if prize["type"] == "zenotoken":
         detail = "Начислено прямо на твой баланс."
         balance_line = f"💰 Баланс ZenoToken: <b>{profile.get('zenotoken', 0)} 🪙</b>"
