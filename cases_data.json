@@ -4,9 +4,9 @@
     "name": "Test",
     "total_count": 5,
     "per_user_limit": 7,
-    "opened_count": 2,
+    "opened_count": 3,
     "opened_by": {
-      "5814345235": 2
+      "5814345235": 3
     }
   }
 }
