@@ -2707,11 +2707,23 @@ async def handle_message(message: Message):
             )
             return
 
-    await message.bot.send_chat_action(message.chat.id, "typing")
     thinking_msg = await message.answer(
         f"⏳ <i>{model['emoji_html']} {model['name']} думает...</i>",
         parse_mode=ParseMode.HTML
     )
+
+    # Keep "typing..." indicator alive for the full duration of the AI call
+    typing_active = True
+
+    async def keep_typing():
+        while typing_active:
+            try:
+                await message.bot.send_chat_action(message.chat.id, "typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    typing_task = asyncio.create_task(keep_typing())
 
     try:
         reply = await call_ai(session, text)
@@ -2744,6 +2756,13 @@ async def handle_message(message: Message):
             f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
             parse_mode=ParseMode.HTML
         )
+    finally:
+        typing_active = False
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
 
 
 # ─── Cases: keyboards ────────────────────────────────────────────────────────
