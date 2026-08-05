@@ -560,8 +560,26 @@ CASE_PRIZES = [
     (2,  "vip",       1,   "VIP-статус на 24 часа",      "👑"),
 ]
 
+def get_prize_weights() -> list[int]:
+    """Return active prize weights — custom overrides fall back to CASE_PRIZES defaults."""
+    data = load_cases()
+    custom = data.get("_prize_weights", {})
+    return [custom.get(str(i), CASE_PRIZES[i][0]) for i in range(len(CASE_PRIZES))]
+
+def set_prize_weight(idx: int, weight: int):
+    data = load_cases()
+    if "_prize_weights" not in data:
+        data["_prize_weights"] = {}
+    data["_prize_weights"][str(idx)] = max(0, weight)
+    save_cases(data)
+
+def reset_prize_weights():
+    data = load_cases()
+    data.pop("_prize_weights", None)
+    save_cases(data)
+
 def pick_prize() -> dict:
-    weights = [p[0] for p in CASE_PRIZES]
+    weights = get_prize_weights()
     chosen = random.choices(CASE_PRIZES, weights=weights, k=1)[0]
     return {"type": chosen[1], "value": chosen[2], "name": chosen[3], "emoji": chosen[4]}
 
@@ -706,6 +724,7 @@ class AdminStates(StatesGroup):
     waiting_maintenance_reason = State()
     waiting_set_price = State()
     waiting_img_gen_price = State()
+    waiting_prize_weight = State()
 
 
 class ImgStates(StatesGroup):
@@ -2239,11 +2258,11 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         encoded = url_quote(english_prompt)
         base_seed = int(time.time())
 
-        # Try flux model up to 3 times, then fallback to turbo
+        # Try free Pollinations models (flux-schnell and turbo are free; flux requires credits)
         attempts = [
-            f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed}&enhance=true",
-            f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=768&height=768&nologo=true&seed={base_seed+1}",
+            f"https://image.pollinations.ai/prompt/{encoded}?model=flux-schnell&width=768&height=768&nologo=true&seed={base_seed}",
             f"https://image.pollinations.ai/prompt/{encoded}?model=turbo&width=768&height=768&nologo=true&seed={base_seed}",
+            f"https://image.pollinations.ai/prompt/{encoded}?model=flux-schnell&width=512&height=512&nologo=true&seed={base_seed+1}",
         ]
 
         _IMG_HEADERS = {
@@ -2802,7 +2821,24 @@ def admin_cases_keyboard() -> InlineKeyboardMarkup:
             callback_data=f"acase:edit:{c['id']}",
         )])
     rows.append([InlineKeyboardButton(text="➕ Создать кейс", callback_data="acase:create")])
+    rows.append([InlineKeyboardButton(text="⚖️ Шансы призов", callback_data="admin:prizes")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def prizes_keyboard() -> InlineKeyboardMarkup:
+    weights = get_prize_weights()
+    total = sum(weights)
+    rows = []
+    for i, prize in enumerate(CASE_PRIZES):
+        w = weights[i]
+        pct = round(w / total * 100, 1) if total > 0 else 0
+        rows.append([InlineKeyboardButton(
+            text=f"{prize[4]} {prize[3]}  —  вес {w}  ({pct}%)",
+            callback_data=f"aprize:edit:{i}",
+        )])
+    rows.append([InlineKeyboardButton(text="🔄 Сбросить к умолчаниям", callback_data="aprize:reset")])
+    rows.append([InlineKeyboardButton(text="◀️ К кейсам", callback_data="admin:cases")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
@@ -3168,6 +3204,90 @@ async def cb_acase_setlimit(callback: CallbackQuery, state: FSMContext):
         ]),
     )
     await callback.answer()
+
+
+# ─── Cases: prize weight admin handlers ──────────────────────────────────────
+
+@router.callback_query(F.data == "admin:prizes")
+async def cb_admin_prizes(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "⚖️ <b>Шансы призов в кейсах</b>\n\n"
+        "Нажмите на приз, чтобы изменить его вес.\n"
+        "Чем выше вес — тем чаще выпадает. Вес 0 = никогда.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=prizes_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("aprize:edit:"))
+async def cb_aprize_edit(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    idx = int(callback.data.split(":", 2)[2])
+    prize = CASE_PRIZES[idx]
+    weights = get_prize_weights()
+    current_w = weights[idx]
+    await state.set_state(AdminStates.waiting_prize_weight)
+    await state.update_data(prize_idx=idx)
+    await callback.message.edit_text(
+        f"⚖️ <b>Изменить вес приза</b>\n\n"
+        f"Приз: {prize[4]} <b>{prize[3]}</b>\n"
+        f"Текущий вес: <b>{current_w}</b>\n\n"
+        f"Введите новый вес (целое число ≥ 0).\n"
+        f"<i>Типичные значения: 0 = никогда, 1–5 = редко, 10–20 = часто, 30–50 = очень часто.</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:prizes")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "aprize:reset")
+async def cb_aprize_reset(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    reset_prize_weights()
+    await callback.message.edit_text(
+        "🔄 <b>Шансы сброшены к умолчаниям.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=prizes_keyboard(),
+    )
+    await callback.answer("Сброшено")
+
+
+@router.message(AdminStates.waiting_prize_weight)
+async def fsm_prize_weight(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        weight = int(message.text.strip())
+        if weight < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Введите целое число ≥ 0:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:prizes")]
+            ]),
+        )
+        return
+    data = await state.get_data()
+    idx = data["prize_idx"]
+    prize = CASE_PRIZES[idx]
+    set_prize_weight(idx, weight)
+    await state.clear()
+    await message.answer(
+        f"✅ Вес приза {prize[4]} <b>{prize[3]}</b> изменён на <b>{weight}</b>.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=prizes_keyboard(),
+    )
 
 
 # ─── Global error handler ─────────────────────────────────────────────────────
