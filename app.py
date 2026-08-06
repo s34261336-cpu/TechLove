@@ -947,6 +947,7 @@ def roles_keyboard(current: str) -> InlineKeyboardMarkup:
             callback_data=f"role:{key}",
             icon_custom_emoji_id=role["emoji_id"],
         )
+        btn.style = "success" if key == current else "primary"
         buttons.append([btn])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -954,14 +955,17 @@ def roles_keyboard(current: str) -> InlineKeyboardMarkup:
 def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
     session = get_session(user_id)
     temp = session["temperature"]
+    btn_down = InlineKeyboardButton(text="➖", callback_data="temp:down")
+    btn_down.style = "danger"
+    btn_val = InlineKeyboardButton(text=f"{temp:.1f}", callback_data="noop")
+    btn_up = InlineKeyboardButton(text="➕", callback_data="temp:up")
+    btn_up.style = "success"
+    btn_close = InlineKeyboardButton(text="✅ Закрыть", callback_data="settings:close")
+    btn_close.style = "primary"
     buttons = [
         [InlineKeyboardButton(text=f"🌡 Температура: {temp:.1f}  (точно ←→ креативно)", callback_data="noop")],
-        [
-            InlineKeyboardButton(text="➖", callback_data="temp:down"),
-            InlineKeyboardButton(text=f"{temp:.1f}", callback_data="noop"),
-            InlineKeyboardButton(text="➕", callback_data="temp:up"),
-        ],
-        [InlineKeyboardButton(text="✅ Закрыть", callback_data="settings:close")],
+        [btn_down, btn_val, btn_up],
+        [btn_close],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -969,18 +973,27 @@ def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
 def admin_keyboard() -> InlineKeyboardMarkup:
     test_label = "🧪 Тест как пользователь: 🟢 ВКЛ" if admin_test_mode else "🧪 Тест как пользователь: ⭕ ВЫКЛ"
     maint_label = "🔧 Тех. работы: 🟢 ВКЛ" if is_maintenance() else "🔧 Тех. работы: ⭕ ВЫКЛ"
+
+    def _btn(text, cb, style="primary"):
+        b = InlineKeyboardButton(text=text, callback_data=cb)
+        b.style = style
+        return b
+
+    test_style = "success" if admin_test_mode else "danger"
+    maint_style = "danger" if is_maintenance() else "success"
+
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
-        [InlineKeyboardButton(text="🪙 Выдать ZenoToken", callback_data="admin:give")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
-        [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin:users")],
-        [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin:find")],
-        [InlineKeyboardButton(text="🤖 Управление моделями", callback_data="admin:models")],
-        [InlineKeyboardButton(text="💰 Цена за запрос", callback_data="admin:prices")],
-        [InlineKeyboardButton(text="🎟 Цена за генерацию", callback_data="admin:imgprice")],
-        [InlineKeyboardButton(text="🎁 Управление кейсами", callback_data="admin:cases")],
-        [InlineKeyboardButton(text=test_label, callback_data="admin:testmode")],
-        [InlineKeyboardButton(text=maint_label, callback_data="admin:maintenance")],
+        [_btn("📢 Рассылка", "admin:broadcast")],
+        [_btn("🪙 Выдать ZenoToken", "admin:give", "success")],
+        [_btn("📊 Статистика", "admin:stats")],
+        [_btn("👥 Список пользователей", "admin:users")],
+        [_btn("🔍 Найти пользователя", "admin:find")],
+        [_btn("🤖 Управление моделями", "admin:models")],
+        [_btn("💰 Цена за запрос", "admin:prices")],
+        [_btn("🎟 Цена за генерацию", "admin:imgprice")],
+        [_btn("🎁 Управление кейсами", "admin:cases")],
+        [_btn(test_label, "admin:testmode", test_style)],
+        [_btn(maint_label, "admin:maintenance", maint_style)],
     ])
 
 
@@ -1009,37 +1022,46 @@ def model_actions_keyboard(model_key: str) -> InlineKeyboardMarkup:
     r = get_model_restriction(model_key)
     rows = []
     if r:
-        rows.append([InlineKeyboardButton(text="✅ Возобновить", callback_data=f"mctrl:resume:{model_key}")])
-    rows.append([InlineKeyboardButton(text="🔴 Ограничить", callback_data=f"mctrl:restrict:{model_key}")])
-    rows.append([InlineKeyboardButton(text="⏳ Временно ограничить", callback_data=f"mctrl:temp:{model_key}")])
-    rows.append([InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")])
+        btn_resume = InlineKeyboardButton(text="✅ Возобновить", callback_data=f"mctrl:resume:{model_key}")
+        btn_resume.style = "success"
+        rows.append([btn_resume])
+    btn_restrict = InlineKeyboardButton(text="🔴 Ограничить", callback_data=f"mctrl:restrict:{model_key}")
+    btn_restrict.style = "danger"
+    btn_temp = InlineKeyboardButton(text="⏳ Временно ограничить", callback_data=f"mctrl:temp:{model_key}")
+    btn_temp.style = "danger"
+    btn_back = InlineKeyboardButton(text="◀️ К моделям", callback_data="admin:models")
+    btn_back.style = "primary"
+    rows.append([btn_restrict])
+    rows.append([btn_temp])
+    rows.append([btn_back])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_cancel_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")]
-    ])
+    btn = InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")
+    btn.style = "danger"
+    return InlineKeyboardMarkup(inline_keyboard=[[btn]])
 
 
 def styles_keyboard(current: str) -> InlineKeyboardMarkup:
     buttons = []
     for key, style in STYLES.items():
         check = "✅ " if key == current else ""
-        buttons.append([InlineKeyboardButton(
+        btn = InlineKeyboardButton(
             text=f"{check}{style['emoji']} {style['name']} — {style['description']}",
             callback_data=f"style:{key}",
-        )])
+        )
+        btn.style = "success" if key == current else "primary"
+        buttons.append([btn])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def start_inline_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🗣 Стиль общения", callback_data="style:menu"),
-            InlineKeyboardButton(text="🎁 Кейсы", callback_data="cases:list"),
-        ]
-    ])
+    btn_style = InlineKeyboardButton(text="🗣 Стиль общения", callback_data="style:menu")
+    btn_style.style = "primary"
+    btn_cases = InlineKeyboardButton(text="🎁 Кейсы", callback_data="cases:list")
+    btn_cases.style = "success"
+    return InlineKeyboardMarkup(inline_keyboard=[[btn_style, btn_cases]])
 
 
 # ─── Router ───────────────────────────────────────────────────────────────────
@@ -2156,7 +2178,7 @@ async def cb_img_prompt(callback: CallbackQuery, state: FSMContext):
         "<i>Пример: закат над горами, в стиле аниме, яркие цвета</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="img:cancel")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="img:cancel", style="danger")]
         ])
     )
     await callback.answer()
@@ -2246,7 +2268,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("🎨 Создаю...")
     await callback.message.edit_text(
-        f"⏳ <b>Перевожу промт и рисую...</b>\n\n<i>{prompt}</i>",
+        f"⏳ <b>Перевожу описание...</b>\n\n<i>{prompt}</i>",
         parse_mode=ParseMode.HTML
     )
 
@@ -2255,69 +2277,100 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         english_prompt = await translate_prompt(prompt)
         logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
 
-        encoded = url_quote(english_prompt)
-        base_seed = int(time.time())
+        await callback.message.edit_text(
+            f"🎨 <b>Отправляю в очередь...</b>\n\n<i>{prompt}</i>",
+            parse_mode=ParseMode.HTML
+        )
 
-        # Try free Pollinations models (flux-schnell and turbo are free; flux requires credits)
-        attempts = [
-            f"https://image.pollinations.ai/prompt/{encoded}?model=flux-schnell&width=768&height=768&nologo=true&seed={base_seed}",
-            f"https://image.pollinations.ai/prompt/{encoded}?model=turbo&width=768&height=768&nologo=true&seed={base_seed}",
-            f"https://image.pollinations.ai/prompt/{encoded}?model=flux-schnell&width=512&height=512&nologo=true&seed={base_seed+1}",
-        ]
-
-        _IMG_HEADERS = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://pollinations.ai/",
-            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        # ── Stable Horde (free community GPU) ─────────────────────────────────
+        HORDE_URL = "https://stablehorde.net/api/v2"
+        horde_headers = {
+            "apikey": "0000000000",  # anonymous free key
+            "Content-Type": "application/json",
+            "Client-Agent": "ZenoAI:1.0:telegram-bot",
         }
-        # Magic bytes for supported image formats
-        _IMG_MAGIC = (b'\xff\xd8', b'\x89P', b'RIFF', b'GIF8')
+        horde_payload = {
+            "prompt": english_prompt,
+            "params": {
+                "width": 512,
+                "height": 512,
+                "steps": 20,
+                "n": 1,
+                "sampler_name": "k_euler_a",
+                "cfg_scale": 7.5,
+            },
+            "nsfw": False,
+            "shared": True,
+            "trusted_workers": False,
+            "slow_workers": True,
+        }
 
-        img_bytes = None
-        last_err = ""
-        for attempt_num, url in enumerate(attempts, 1):
-            try:
-                await callback.message.edit_text(
-                    f"⏳ <b>Рисую...</b> (попытка {attempt_num}/3)\n\n<i>{prompt}</i>",
-                    parse_mode=ParseMode.HTML
-                )
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        url,
-                        headers=_IMG_HEADERS,
-                        timeout=aiohttp.ClientTimeout(total=90, connect=10),
-                        allow_redirects=True,
-                    ) as resp:
-                        if resp.status == 200:
-                            content_type = resp.headers.get("Content-Type", "")
-                            data = await resp.read()
-                            # Accept by content-type first, then by magic bytes
-                            is_image = "image/" in content_type or (
-                                len(data) > 500 and data[:4] in _IMG_MAGIC
-                            )
-                            if is_image and len(data) > 500:
-                                img_bytes = data
-                                break
-                            last_err = f"не картинка (content-type: {content_type}, размер: {len(data)})"
-                        else:
-                            body = ""
-                            try:
-                                body = (await resp.text())[:200]
-                            except Exception:
-                                pass
-                            last_err = f"HTTP {resp.status}: {body}"
-            except Exception as e:
-                last_err = str(e)
-                logger.warning(f"Pollinations attempt {attempt_num} failed: {e}")
+        async with aiohttp.ClientSession() as http:
+            # Submit job
+            async with http.post(
+                f"{HORDE_URL}/generate/async",
+                json=horde_payload,
+                headers=horde_headers,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status != 202:
+                    body = await resp.text()
+                    raise ValueError(f"Horde submit HTTP {resp.status}: {body[:200]}")
+                submit_data = await resp.json()
+                job_id = submit_data["id"]
+                logger.info(f"Horde job submitted: {job_id}")
 
-        if not img_bytes:
-            raise ValueError(last_err or "all attempts failed")
+            # Poll for completion (max 4 min)
+            img_bytes = None
+            for tick in range(48):
+                await asyncio.sleep(5)
+                async with http.get(
+                    f"{HORDE_URL}/generate/check/{job_id}",
+                    headers=horde_headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    check = await resp.json()
+
+                if check.get("faulted"):
+                    raise ValueError("Horde: генерация не удалась")
+                if check.get("done"):
+                    break
+
+                wait_time = check.get("wait_time", "?")
+                queue_pos = check.get("queue_position", "?")
+                try:
+                    await callback.message.edit_text(
+                        f"🎨 <b>Рисую...</b>\n\n"
+                        f"<i>{prompt}</i>\n\n"
+                        f"⏱ ~{wait_time}с · позиция в очереди: {queue_pos}",
+                        parse_mode=ParseMode.HTML,
+                    )
+                except TelegramBadRequest:
+                    pass
+            else:
+                raise ValueError("Horde: таймаут (4 минуты)")
+
+            # Fetch result
+            async with http.get(
+                f"{HORDE_URL}/generate/status/{job_id}",
+                headers=horde_headers,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                result = await resp.json()
+
+            generations = result.get("generations", [])
+            if not generations:
+                raise ValueError("Horde: нет результата")
+            img_b64 = generations[0].get("img", "")
+            if not img_b64:
+                raise ValueError("Horde: пустое изображение")
+            img_bytes = base64.b64decode(img_b64)
 
         # Deduct free_gens only on success (admin/VIP exempt)
         if price > 0 and not is_admin(user_id) and not is_vip(user_id):
             deduct_user_free_gens(user_id, price)
 
-        photo = BufferedInputFile(img_bytes, filename="image.jpg")
+        photo = BufferedInputFile(img_bytes, filename="image.png")
         await callback.message.answer_photo(
             photo,
             caption=f"🎨 <i>{prompt}</i>",
@@ -2325,8 +2378,8 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         )
 
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Создать ещё", callback_data="img:generate", style="success")],
-            [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
+            [InlineKeyboardButton(text="🎨 Создать ещё", callback_data="img:generate", style="success")],
+            [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt", style="primary")],
         ])
         await callback.message.edit_text(
             f"{IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n<b>Последний промт:</b>\n<i>{prompt}</i>",
@@ -2335,14 +2388,14 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         )
 
     except Exception as e:
-        logger.error(f"Pollinations error: {e}")
+        logger.error(f"Image gen error: {e}")
         kb_err = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="img:generate")],
+            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="img:generate", style="primary")],
             [InlineKeyboardButton(text="✏️ Новый промт", callback_data="img:prompt")],
         ])
         await callback.message.edit_text(
             "❌ <b>Не удалось создать картинку.</b>\n\n"
-            "Попробуйте снова или измените описание.",
+            "Сервис генерации временно недоступен. Попробуйте позже или измените описание.",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_err
         )
@@ -2624,7 +2677,7 @@ async def fsm_case_total(message: Message, state: FSMContext):
         f"🎁 <b>Создание кейса: «{data['case_name']}»</b>\n\nШаг 3/3: Введите <b>лимит открытий на одного пользователя</b>:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases", style="danger")]
         ]),
     )
 
@@ -2806,23 +2859,32 @@ def cases_list_keyboard(cases: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def case_view_keyboard(case_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎰 Открыть кейс", callback_data=f"case:open:{case_id}")],
-        [InlineKeyboardButton(text="‹ Все кейсы", callback_data="cases:list")],
-    ])
+    btn_open = InlineKeyboardButton(text="🎰 Открыть кейс", callback_data=f"case:open:{case_id}")
+    btn_open.style = "success"
+    btn_back = InlineKeyboardButton(text="‹ Все кейсы", callback_data="cases:list")
+    btn_back.style = "primary"
+    return InlineKeyboardMarkup(inline_keyboard=[[btn_open], [btn_back]])
 
 def admin_cases_keyboard() -> InlineKeyboardMarkup:
     cases = get_all_cases()
     rows = []
     for c in cases:
         remaining = c["total_count"] - c["opened_count"]
-        rows.append([InlineKeyboardButton(
+        btn = InlineKeyboardButton(
             text=f"🎁 {c['name']} ({remaining}/{c['total_count']})",
             callback_data=f"acase:edit:{c['id']}",
-        )])
-    rows.append([InlineKeyboardButton(text="➕ Создать кейс", callback_data="acase:create")])
-    rows.append([InlineKeyboardButton(text="⚖️ Шансы призов", callback_data="admin:prizes")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+        )
+        btn.style = "primary"
+        rows.append([btn])
+    btn_create = InlineKeyboardButton(text="➕ Создать кейс", callback_data="acase:create")
+    btn_create.style = "success"
+    btn_prizes = InlineKeyboardButton(text="⚖️ Шансы призов", callback_data="admin:prizes")
+    btn_prizes.style = "primary"
+    btn_back = InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")
+    btn_back.style = "primary"
+    rows.append([btn_create])
+    rows.append([btn_prizes])
+    rows.append([btn_back])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2833,21 +2895,31 @@ def prizes_keyboard() -> InlineKeyboardMarkup:
     for i, prize in enumerate(CASE_PRIZES):
         w = weights[i]
         pct = round(w / total * 100, 1) if total > 0 else 0
-        rows.append([InlineKeyboardButton(
+        btn = InlineKeyboardButton(
             text=f"{prize[4]} {prize[3]}  —  вес {w}  ({pct}%)",
             callback_data=f"aprize:edit:{i}",
-        )])
-    rows.append([InlineKeyboardButton(text="🔄 Сбросить к умолчаниям", callback_data="aprize:reset")])
-    rows.append([InlineKeyboardButton(text="◀️ К кейсам", callback_data="admin:cases")])
+        )
+        btn.style = "primary"
+        rows.append([btn])
+    btn_reset = InlineKeyboardButton(text="🔄 Сбросить к умолчаниям", callback_data="aprize:reset")
+    btn_reset.style = "danger"
+    btn_back = InlineKeyboardButton(text="◀️ К кейсам", callback_data="admin:cases")
+    btn_back.style = "primary"
+    rows.append([btn_reset])
+    rows.append([btn_back])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
+    def _btn(text, cb, style="primary"):
+        b = InlineKeyboardButton(text=text, callback_data=cb)
+        b.style = style
+        return b
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить название", callback_data=f"acase:rename:{case_id}")],
-        [InlineKeyboardButton(text="🔢 Изменить количество", callback_data=f"acase:settotal:{case_id}")],
-        [InlineKeyboardButton(text="👤 Изменить лимит на пользователя", callback_data=f"acase:setlimit:{case_id}")],
-        [InlineKeyboardButton(text="🗑 Удалить кейс", callback_data=f"acase:delete:{case_id}")],
-        [InlineKeyboardButton(text="◀️ К кейсам", callback_data="admin:cases")],
+        [_btn("✏️ Изменить название", f"acase:rename:{case_id}")],
+        [_btn("🔢 Изменить количество", f"acase:settotal:{case_id}")],
+        [_btn("👤 Изменить лимит на пользователя", f"acase:setlimit:{case_id}")],
+        [_btn("🗑 Удалить кейс", f"acase:delete:{case_id}", "danger")],
+        [_btn("◀️ К кейсам", "admin:cases")],
     ])
 
 
@@ -3104,7 +3176,7 @@ async def cb_acase_create(callback: CallbackQuery, state: FSMContext):
         "🎁 <b>Создание кейса</b>\n\nШаг 1/3: Введите <b>название</b> кейса:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases", style="danger")]
         ]),
     )
     await callback.answer()
@@ -3164,7 +3236,7 @@ async def cb_acase_rename(callback: CallbackQuery, state: FSMContext):
         "✏️ Введите новое <b>название</b> кейса:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}", style="danger")]
         ]),
     )
     await callback.answer()
@@ -3182,7 +3254,7 @@ async def cb_acase_settotal(callback: CallbackQuery, state: FSMContext):
         "🔢 Введите новое <b>общее количество</b> кейсов:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}", style="danger")]
         ]),
     )
     await callback.answer()
@@ -3200,7 +3272,7 @@ async def cb_acase_setlimit(callback: CallbackQuery, state: FSMContext):
         "👤 Введите новый <b>лимит открытий на пользователя</b>:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}", style="danger")]
         ]),
     )
     await callback.answer()
@@ -3242,7 +3314,7 @@ async def cb_aprize_edit(callback: CallbackQuery, state: FSMContext):
         f"<i>Типичные значения: 0 = никогда, 1–5 = редко, 10–20 = часто, 30–50 = очень часто.</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:prizes")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:prizes", style="danger")]
         ]),
     )
     await callback.answer()
@@ -3274,7 +3346,7 @@ async def fsm_prize_weight(message: Message, state: FSMContext):
         await message.answer(
             "❌ Введите целое число ≥ 0:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:prizes")]
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:prizes", style="danger")]
             ]),
         )
         return
