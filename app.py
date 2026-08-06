@@ -2361,10 +2361,22 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             generations = result.get("generations", [])
             if not generations:
                 raise ValueError("Horde: нет результата")
-            img_b64 = generations[0].get("img", "")
-            if not img_b64:
+            gen = generations[0]
+            img_field = gen.get("img", "")
+            if not img_field:
                 raise ValueError("Horde: пустое изображение")
-            img_bytes = base64.b64decode(img_b64)
+
+            # Horde may return a URL (r2=True) or raw base64
+            if gen.get("r2") or img_field.startswith("http"):
+                async with http.get(
+                    img_field,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as img_resp:
+                    if img_resp.status != 200:
+                        raise ValueError(f"Horde: не удалось скачать изображение ({img_resp.status})")
+                    img_bytes = await img_resp.read()
+            else:
+                img_bytes = base64.b64decode(img_field)
 
         # Deduct free_gens only on success (admin/VIP exempt)
         if price > 0 and not is_admin(user_id) and not is_vip(user_id):
