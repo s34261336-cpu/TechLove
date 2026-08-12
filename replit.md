@@ -1,45 +1,30 @@
-# [Project name]
+# Zeno AI Telegram Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Импортированный Python-бот TechLove с AI-ассистентом в Telegram, выбором моделей и ролей, историей диалогов и административными инструментами.
 
-## Run & Operate
+## Запуск
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Рабочий процесс **TechLove Bot** запускает `python app.py`.
+- Данные пользователей, моделей и кейсов хранятся в JSON-файлах в корне проекта.
+- Для работы бота нужны секреты `BOT_TOKEN` и `GROQ_API_KEY`.
 
-## Stack
+## Стек
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11
+- aiogram 3
+- Groq API
+- aiohttp
+- JSON-файлы для хранения состояния
 
-## Where things live
+## Возможности
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- Несколько AI-моделей и ролей ассистента
+- История диалогов и настройки температуры
+- Генерация и анализ изображений
+- Профиль пользователя и система ZenoToken
+- Антиспам-защита
+- Административная панель с управлением пользователями, моделями и рассылками
 
-## Architecture decisions
+## Импорт
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+Исходники импортированы из `https://github.com/s34261336-cpu/TechLove.git`.

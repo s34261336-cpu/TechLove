@@ -1,0 +1,10 @@
+[project]
+name = "python-template"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram==3.7.0",
+    "groq==1.5.0",
+]

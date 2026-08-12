@@ -1,0 +1,6 @@
+aiogram==3.30.0
+aiohttp
+groq
+aiogram
+aiohttp
+groq
