@@ -3,6 +3,8 @@ import re
 import asyncio
 import logging
 import json
+import tempfile
+import threading
 from datetime import datetime
 from collections import defaultdict
 import time
@@ -37,6 +39,12 @@ SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Local speech-to-text settings. The model is downloaded only on the first
+# voice message and then reused for the lifetime of the bot process.
+WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "base")
+_whisper_model = None
+_whisper_model_lock = threading.Lock()
 
 ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
@@ -2734,10 +2742,98 @@ async def fsm_case_limit(message: Message, state: FSMContext):
 
 # ─── Message handler ──────────────────────────────────────────────────────────
 
+def transcribe_voice_sync(audio_bytes: bytes) -> str:
+    """Transcribe a Telegram voice message locally with free Whisper."""
+    global _whisper_model
+
+    # Import lazily so the bot can still start while the speech package is
+    # being installed and so model loading never happens during startup.
+    from faster_whisper import WhisperModel
+
+    if _whisper_model is None:
+        with _whisper_model_lock:
+            if _whisper_model is None:
+                logger.info(
+                    "Loading local Whisper model '%s' for voice transcription...",
+                    WHISPER_MODEL_SIZE,
+                )
+                _whisper_model = WhisperModel(
+                    WHISPER_MODEL_SIZE,
+                    device="cpu",
+                    compute_type="int8",
+                )
+
+    audio_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as audio_file:
+            audio_file.write(audio_bytes)
+            audio_path = audio_file.name
+
+        segments, info = _whisper_model.transcribe(
+            audio_path,
+            language=None,
+            beam_size=5,
+            vad_filter=True,
+            condition_on_previous_text=False,
+        )
+        text = " ".join(segment.text.strip() for segment in segments).strip()
+        if not text:
+            raise ValueError("В голосовом сообщении не удалось разобрать речь.")
+
+        logger.info(
+            "Voice message transcribed locally: language=%s, duration=%.1fs",
+            info.language,
+            info.duration,
+        )
+        return text
+    finally:
+        if audio_path:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+
+
+@router.message(F.voice)
+async def handle_voice(message: Message):
+    """Turn a Telegram voice message into text without a paid speech API."""
+    user_id = message.from_user.id
+    touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
+    status = await message.answer(
+        "🎙️ <i>Распознаю голосовое локально...</i>\n"
+        "Первое голосовое может обрабатываться дольше: загружается бесплатная Whisper-модель.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        telegram_file = await message.bot.get_file(message.voice.file_id)
+        audio = BytesIO()
+        await message.bot.download_file(telegram_file.file_path, audio)
+        text = await asyncio.to_thread(transcribe_voice_sync, audio.getvalue())
+
+        preview = text
+        if len(preview) > 3500:
+            preview = preview[:3500].rstrip() + "…"
+        await status.edit_text(f"📝 Распознано:\n\n{preview}")
+
+        # Send the transcription through the existing AI conversation flow.
+        await process_text_message(message, text)
+    except Exception as e:
+        logger.error("Voice transcription error for user %s: %s", user_id, e, exc_info=True)
+        await status.edit_text(
+            "❌ Не удалось распознать голосовое сообщение.\n\n"
+            "Попробуйте записать его ещё раз короче и без сильного фонового шума."
+        )
+
+
 @router.message(F.text)
 async def handle_message(message: Message):
+    await process_text_message(message, message.text or "")
+
+
+async def process_text_message(message: Message, text: str):
     user_id = message.from_user.id
-    text = message.text.strip()
+    text = text.strip()
 
     # Track user activity
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
