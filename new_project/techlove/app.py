@@ -578,7 +578,8 @@ RUSSIAN_MONTHS = {
 }
 MONTH_PATTERN = "|".join(RUSSIAN_MONTHS)
 REMINDER_INTENT_RE = re.compile(
-    r"^\s*(?:напомни(?:\s+мне)?|напоминание(?:\s+мне)?)\b",
+    r"^\s*(?:(?:поставь|создай|добавь|сделай)\s+)?"
+    r"(?:мне\s+)?(?:напомни|напоминание|напомнить)(?:\s+мне)?\b",
     re.IGNORECASE,
 )
 
@@ -656,16 +657,21 @@ def _reminder_datetime(reminder: dict) -> datetime | None:
         return None
 
 
-def _reminder_task_text(text: str, end: int) -> str:
-    task = text[:end].strip(" \t\n,;:.-")
+def _clean_reminder_task(task: str) -> str:
+    task = task.strip(" \t\n,;:.-")
     task = re.sub(
-        r"^\s*(?:напомни(?:\s+мне)?|напоминание(?:\s+мне)?)\s*",
+        r"^\s*(?:(?:поставь|создай|добавь|сделай)\s+)?"
+        r"(?:мне\s+)?(?:напомни|напоминание|напомнить)(?:\s+мне)?\s*",
         "",
         task,
         flags=re.IGNORECASE,
     )
-    task = re.sub(r"^(?:что|про)\s+", "", task, flags=re.IGNORECASE)
+    task = re.sub(r"^(?:что|про|о|об|чтобы)\s+", "", task, flags=re.IGNORECASE)
     return task.strip(" \t\n,;:.-")
+
+
+def _reminder_task_text(text: str, end: int) -> str:
+    return _clean_reminder_task(text[:end])
 
 
 def parse_reminder_request(
@@ -706,6 +712,8 @@ def parse_reminder_request(
         else:
             due = now + timedelta(days=amount)
         task = _reminder_task_text(text, duration_match.start())
+        if not task:
+            task = _clean_reminder_task(text[duration_match.end():])
         if not task:
             return None, None, "После слова «напомни» нужно написать, о чём напомнить."
         return task, due, None
@@ -781,6 +789,11 @@ def parse_reminder_request(
 
     task = _reminder_task_text(text, date_start)
     if not task:
+        schedule_end = time_match.end()
+        if date_match is not None:
+            schedule_end = max(schedule_end, date_match.end())
+        task = _clean_reminder_task(text[schedule_end:])
+    if not task:
         return None, None, "После слова «напомни» нужно написать, о чём напомнить."
 
     due = datetime(
@@ -816,6 +829,13 @@ def create_reminder(user_id: int, chat_id: int, task: str, due: datetime) -> dic
     reminders = load_reminders()
     reminders.append(reminder)
     save_reminders(reminders)
+    logger.info(
+        "Напоминание сохранено: id=%s user=%s due=%s file=%s",
+        reminder["id"],
+        user_id,
+        reminder["due_at"],
+        REMINDERS_FILE,
+    )
     return reminder
 
 
@@ -872,6 +892,7 @@ def format_reminders(user_id: int) -> str:
 
 async def reminder_worker(bot: Bot) -> None:
     """Deliver due reminders from local storage, surviving bot restarts."""
+    logger.info("Фоновый календарь запущен, файл: %s", REMINDERS_FILE)
     while True:
         try:
             reminders = load_reminders()
@@ -885,6 +906,12 @@ async def reminder_worker(bot: Bot) -> None:
                     continue
                 try:
                     due_moscow = due.astimezone(MOSCOW_TZ)
+                    logger.info(
+                        "Отправляю напоминание: id=%s user=%s due=%s",
+                        reminder.get("id"),
+                        reminder.get("user_id"),
+                        reminder.get("due_at"),
+                    )
                     await bot.send_message(
                         chat_id=reminder["chat_id"],
                         text=(
@@ -1581,6 +1608,11 @@ async def cmd_help(message: Message):
 @router.message(F.text == "🔔 Напоминания")
 async def cmd_reminders(message: Message):
     touch_user(message.from_user.id, message.from_user.first_name, message.from_user.username or "")
+    logger.info(
+        "Открыт список напоминаний: user=%s count=%s",
+        message.from_user.id,
+        len(get_user_reminders(message.from_user.id)),
+    )
     await message.answer(
         format_reminders(message.from_user.id),
         parse_mode=ParseMode.HTML,
