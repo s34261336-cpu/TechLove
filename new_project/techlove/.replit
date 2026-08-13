@@ -26,7 +26,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd new_project/techlove && python app.py"
+args = "python app.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
