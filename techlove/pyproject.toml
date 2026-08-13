@@ -1,0 +1,12 @@
+[project]
+name = "zeno-ai-telegram-bot"
+version = "0.1.0"
+description = "Telegram AI bot with local voice transcription"
+authors = ["TechLove"]
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram==3.30.0",
+    "aiohttp",
+    "groq",
+    "faster-whisper",
+]
