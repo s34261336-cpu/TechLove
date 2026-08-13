@@ -20,6 +20,10 @@ author = "agent"
 task = "workflow.run"
 args = "TechLove Bot"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Git Auto Sync"
+
 [[workflows.workflow]]
 name = "TechLove Bot"
 author = "agent"
@@ -27,6 +31,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd new_project/techlove && python app.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Git Auto Sync"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/git-auto-sync.sh"
 
 [workflows.workflow.metadata]
 outputType = "console"

@@ -26,15 +26,25 @@ commit_changes() {
     return 1
   fi
 
-  git commit -m "Auto-sync project changes"
-  return 0
+  if git commit -m "Auto-sync project changes"; then
+    return 0
+  fi
+
+  return 2
 }
 
 sync_once() {
+  local commit_status
   if commit_changes; then
     log "Изменения сохранены в локальный коммит."
   else
-    log "Новых изменений нет."
+    commit_status=$?
+    if [[ "$commit_status" -eq 1 ]]; then
+      log "Новых изменений нет."
+    else
+      log "Не удалось создать коммит; изменения оставлены локально."
+      return 1
+    fi
   fi
 
   if git push --porcelain "$REMOTE" HEAD; then
