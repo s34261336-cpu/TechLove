@@ -6,8 +6,11 @@ import json
 import tempfile
 import threading
 from datetime import datetime
+from datetime import date, timedelta, timezone
 from collections import defaultdict
 import time
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 import aiohttp
 from html import escape as html_escape
 from urllib.parse import quote as url_quote
@@ -51,6 +54,9 @@ ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
 MODELS_FILE = "models_data.json"
 CASES_FILE = "cases_data.json"
+REMINDERS_FILE = "reminders_data.json"
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+REMINDER_CHECK_INTERVAL = 15
 
 
 # ─── Premium emoji helper ─────────────────────────────────────────────────────
@@ -552,6 +558,329 @@ def record_case_open(case_id: str, user_id: int):
     save_cases(data)
 
 
+# ─── Eternal calendar: reminders ──────────────────────────────────────────────
+
+RUSSIAN_MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+MONTH_PATTERN = "|".join(RUSSIAN_MONTHS)
+REMINDER_INTENT_RE = re.compile(
+    r"^\s*(?:напомни(?:\s+мне)?|напоминание(?:\s+мне)?)\b",
+    re.IGNORECASE,
+)
+
+
+def load_reminders() -> list[dict]:
+    if not os.path.exists(REMINDERS_FILE):
+        return []
+    try:
+        with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        logger.exception("Не удалось загрузить напоминания")
+        return []
+
+
+def save_reminders(data: list[dict]) -> None:
+    """Save reminders atomically so a restart cannot leave a half-written file."""
+    directory = os.path.dirname(os.path.abspath(REMINDERS_FILE))
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=directory,
+            prefix=".reminders-",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+            temp_path = f.name
+        os.replace(temp_path, REMINDERS_FILE)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def _reminder_datetime(reminder: dict) -> datetime | None:
+    try:
+        value = datetime.fromisoformat(reminder["due_at"])
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _reminder_task_text(text: str, end: int) -> str:
+    task = text[:end].strip(" \t\n,;:.-")
+    task = re.sub(
+        r"^\s*(?:напомни(?:\s+мне)?|напоминание(?:\s+мне)?)\s*",
+        "",
+        task,
+        flags=re.IGNORECASE,
+    )
+    task = re.sub(r"^(?:что|про)\s+", "", task, flags=re.IGNORECASE)
+    return task.strip(" \t\n,;:.-")
+
+
+def parse_reminder_request(
+    raw_text: str,
+    now_moscow: datetime | None = None,
+) -> tuple[str | None, datetime | None, str | None]:
+    """Parse a reminder written in natural Russian.
+
+    Supported examples:
+      - Напомни купить пиццу 14 августа в 23:00
+      - Напомни позвонить завтра в 09:30
+      - Напомни проверить почту через 2 часа
+      - Напомни оплатить счёт 14.08.2026 в 18:00
+    """
+    now = now_moscow or datetime.now(MOSCOW_TZ)
+    text = re.sub(r"\([^)]*\)", " ", raw_text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    duration_match = re.search(
+        r"\bчерез\s+(\d+)\s+(минут(?:у|ы)?|час(?:а|ов)?|день|дня|дней)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    time_matches = list(
+        re.finditer(r"\b(?:в\s*)?(\d{1,2})[:.](\d{2})\b", text, flags=re.IGNORECASE)
+    )
+    time_match = time_matches[-1] if time_matches else None
+
+    if duration_match:
+        amount = int(duration_match.group(1))
+        unit = duration_match.group(2).lower()
+        if amount <= 0:
+            return None, None, "Укажите положительный срок, например: «через 30 минут»."
+        if unit.startswith("минут"):
+            due = now + timedelta(minutes=amount)
+        elif unit.startswith("час"):
+            due = now + timedelta(hours=amount)
+        else:
+            due = now + timedelta(days=amount)
+        task = _reminder_task_text(text, duration_match.start())
+        if not task:
+            return None, None, "После слова «напомни» нужно написать, о чём напомнить."
+        return task, due, None
+
+    if not time_match:
+        return (
+            None,
+            None,
+            "Не нашёл время. Пример: «Напомни купить пиццу 14 августа в 23:00».",
+        )
+
+    hour = int(time_match.group(1))
+    minute = int(time_match.group(2))
+    if hour > 23 or minute > 59:
+        return None, None, "Проверьте время: часы от 0 до 23, минуты от 0 до 59."
+
+    relative_match = re.search(
+        r"\b(сегодня|завтра|послезавтра)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    month_match = re.search(
+        rf"\b(\d{{1,2}})\s+({MONTH_PATTERN})(?:\s+(\d{{4}}))?\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    numeric_date_match = re.search(
+        r"\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{4}))?\b",
+        text,
+    )
+
+    date_match = next(
+        (
+            match
+            for match in (relative_match, month_match, numeric_date_match)
+            if match and match.start() <= time_match.start()
+        ),
+        None,
+    )
+
+    if date_match is None:
+        # If only a time is given, use the next occurrence of that time.
+        date_start = time_match.start()
+        target_date = now.date()
+        explicit_year = False
+    else:
+        date_start = date_match.start()
+        explicit_year = False
+        if relative_match is date_match:
+            word = date_match.group(1).lower()
+            offset = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[word]
+            target_date = now.date() + timedelta(days=offset)
+        elif month_match is date_match:
+            day = int(date_match.group(1))
+            month = RUSSIAN_MONTHS[date_match.group(2).lower()]
+            year_text = date_match.group(3)
+            explicit_year = bool(year_text)
+            year = int(year_text) if year_text else now.year
+            try:
+                target_date = date(year, month, day)
+            except ValueError:
+                return None, None, "Такой даты нет в календаре."
+        else:
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year_text = date_match.group(3)
+            explicit_year = bool(year_text)
+            year = int(year_text) if year_text else now.year
+            try:
+                target_date = date(year, month, day)
+            except ValueError:
+                return None, None, "Такой даты нет в календаре."
+
+    task = _reminder_task_text(text, date_start)
+    if not task:
+        return None, None, "После слова «напомни» нужно написать, о чём напомнить."
+
+    due = datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        hour,
+        minute,
+        tzinfo=MOSCOW_TZ,
+    )
+
+    if date_match is None and due <= now:
+        due += timedelta(days=1)
+    elif date_match and not explicit_year and due <= now:
+        # "14 августа" means the next occurrence if this year's date has passed.
+        if month_match is date_match or numeric_date_match is date_match:
+            due = due.replace(year=due.year + 1)
+    if due <= now:
+        return None, None, "Это время уже прошло. Укажите будущую дату и время."
+
+    return task, due, None
+
+
+def create_reminder(user_id: int, chat_id: int, task: str, due: datetime) -> dict:
+    reminder = {
+        "id": uuid4().hex[:8],
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "task": task,
+        "due_at": due.astimezone(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    reminders = load_reminders()
+    reminders.append(reminder)
+    save_reminders(reminders)
+    return reminder
+
+
+def get_user_reminders(user_id: int) -> list[dict]:
+    reminders = [
+        reminder
+        for reminder in load_reminders()
+        if reminder.get("user_id") == user_id and not reminder.get("sent_at")
+    ]
+    return sorted(
+        reminders,
+        key=lambda reminder: _reminder_datetime(reminder) or datetime.max.replace(tzinfo=timezone.utc),
+    )
+
+
+def cancel_reminder(user_id: int, reminder_id: str) -> bool:
+    reminders = load_reminders()
+    for reminder in reminders:
+        if (
+            reminder.get("user_id") == user_id
+            and reminder.get("id") == reminder_id
+            and not reminder.get("sent_at")
+        ):
+            reminders.remove(reminder)
+            save_reminders(reminders)
+            return True
+    return False
+
+
+def format_reminders(user_id: int) -> str:
+    reminders = get_user_reminders(user_id)
+    if not reminders:
+        return (
+            "🔔 <b>Вечный календарь</b>\n\n"
+            "Активных напоминаний пока нет.\n\n"
+            "Напишите, например:\n"
+            "<i>Напомни купить пиццу 14 августа в 23:00</i>"
+        )
+
+    lines = ["🔔 <b>Вечный календарь</b>", "", "Ваши активные напоминания:"]
+    for reminder in reminders:
+        due = _reminder_datetime(reminder)
+        if due is None:
+            continue
+        due_moscow = due.astimezone(MOSCOW_TZ)
+        lines.append(
+            f"• <code>{reminder['id']}</code> — "
+            f"{html_escape(reminder['task'])}\n"
+            f"  🗓 {due_moscow.strftime('%d.%m.%Y %H:%M')} МСК"
+        )
+    lines.append("\nУдалить: <code>/cancel_reminder ID</code>")
+    return "\n".join(lines)
+
+
+async def reminder_worker(bot: Bot) -> None:
+    """Deliver due reminders from local storage, surviving bot restarts."""
+    while True:
+        try:
+            reminders = load_reminders()
+            changed = False
+            now = datetime.now(timezone.utc)
+            for reminder in reminders:
+                if reminder.get("sent_at"):
+                    continue
+                due = _reminder_datetime(reminder)
+                if due is None or due > now:
+                    continue
+                try:
+                    due_moscow = due.astimezone(MOSCOW_TZ)
+                    await bot.send_message(
+                        chat_id=reminder["chat_id"],
+                        text=(
+                            "🔔 <b>Напоминание</b>\n\n"
+                            f"{html_escape(reminder['task'])}\n\n"
+                            f"🗓 {due_moscow.strftime('%d.%m.%Y %H:%M')} МСК"
+                        ),
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception:
+                    logger.exception("Не удалось отправить напоминание %s", reminder.get("id"))
+                    continue
+                reminder["sent_at"] = now.isoformat()
+                changed = True
+            if changed:
+                save_reminders(reminders)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Ошибка фонового календаря")
+        await asyncio.sleep(REMINDER_CHECK_INTERVAL)
+
+
 # ─── Cases: prizes ────────────────────────────────────────────────────────────
 
 import random
@@ -914,7 +1243,8 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="🤖 Модель"), KeyboardButton(text="🎭 Роль")],
         [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
-        [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="🔔 Напоминания")],
+        [KeyboardButton(text="👤 Профиль")],
         [KeyboardButton(text="ℹ️ Помощь")],
     ]
     if user_id == ADMIN_ID:
@@ -1193,6 +1523,7 @@ async def cmd_help(message: Message):
         "🎨 <b>Нейро-фото</b> — генерация картинок по описанию\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
+        "🔔 <b>Вечный календарь</b> — напоминания по дате и времени МСК\n"
         "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
         "📝 <b>Команды:</b>\n"
         "/start — главное меню\n"
@@ -1202,6 +1533,8 @@ async def cmd_help(message: Message):
         "/img — генератор изображений\n"
         "/status — текущие настройки\n"
         "/profile — мой профиль\n"
+        "/reminders — мои напоминания\n"
+        "/cancel_reminder ID — удалить напоминание\n"
         "/help — помощь"
     )
     kb = main_keyboard(message.from_user.id)
@@ -1212,6 +1545,41 @@ async def cmd_help(message: Message):
             await message.answer(strip_tg_emoji(text), parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
             raise
+
+
+# ─── Eternal calendar commands ─────────────────────────────────────────────────
+
+@router.message(Command("reminders"))
+@router.message(Command("calendar"))
+@router.message(F.text == "🔔 Напоминания")
+async def cmd_reminders(message: Message):
+    touch_user(message.from_user.id, message.from_user.first_name, message.from_user.username or "")
+    await message.answer(
+        format_reminders(message.from_user.id),
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_keyboard(message.from_user.id),
+    )
+
+
+@router.message(Command("cancel_reminder"))
+async def cmd_cancel_reminder(message: Message):
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "Чтобы удалить напоминание, отправьте:\n"
+            "<code>/cancel_reminder ID</code>\n\n"
+            "ID можно посмотреть в разделе «🔔 Напоминания».",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    reminder_id = parts[1].strip().split()[0]
+    if cancel_reminder(message.from_user.id, reminder_id):
+        await message.answer("✅ Напоминание удалено.", parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(
+            "Не нашёл активное напоминание с таким ID.",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 # ─── /model ───────────────────────────────────────────────────────────────────
@@ -2953,6 +3321,29 @@ async def process_text_message(message: Message, text: str):
     # Track user activity
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
 
+    if REMINDER_INTENT_RE.match(text):
+        task, due, error = parse_reminder_request(text)
+        if error:
+            await message.answer(
+                f"🔔 <b>Вечный календарь</b>\n\n{html_escape(error)}\n\n"
+                "<i>Пример: «Напомни купить пиццу 14 августа в 23:00»</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        assert task is not None and due is not None
+        reminder = create_reminder(user_id, message.chat.id, task, due)
+        due_moscow = due.astimezone(MOSCOW_TZ)
+        await message.answer(
+            "✅ <b>Напоминание сохранено</b>\n\n"
+            f"🔔 {html_escape(task)}\n"
+            f"🗓 {due_moscow.strftime('%d.%m.%Y %H:%M')} МСК\n"
+            f"🆔 <code>{reminder['id']}</code>\n\n"
+            "Я пришлю уведомление в указанное время. "
+            "Напоминания сохраняются локально и переживают перезапуск бота.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     session = get_session(user_id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
@@ -3617,6 +4008,9 @@ async def set_commands(bot: Bot):
         BotCommand(command="vision",  description="Анализ фото — что на нём"),
         BotCommand(command="status",  description="Текущие настройки"),
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
+        BotCommand(command="reminders", description="Вечный календарь"),
+        BotCommand(command="calendar", description="Мои напоминания"),
+        BotCommand(command="cancel_reminder", description="Удалить напоминание"),
         BotCommand(command="help",    description="Помощь"),
     ])
 
@@ -3632,12 +4026,15 @@ async def main():
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
     dp.include_router(router)
+    reminder_task = asyncio.create_task(reminder_worker(bot))
 
     try:
         await set_commands(bot)
         logger.info("Бот запущен на Groq!")
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
+        reminder_task.cancel()
+        await asyncio.gather(reminder_task, return_exceptions=True)
         logger.info("Останавливаю бота, закрываю сессию...")
         await bot.session.close()
         logger.info("Сессия закрыта.")
