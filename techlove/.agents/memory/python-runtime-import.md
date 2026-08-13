@@ -3,8 +3,8 @@ name: Python runtime for imported bots
 description: Environment-specific guidance for running imported Python applications with dependencies.
 ---
 
-Imported Python applications may need the managed Python 3.11 runtime before dependency installation; the base Python executable can be externally managed and lack pip. Use the project package-management flow rather than system pip.
+Imported Python applications nested inside the shared workspace use the managed workspace Python environment. Install dependencies through the project package-management flow rather than system pip; the environment may create root-level `pyproject.toml`/`uv.lock` metadata and a shared `.pythonlibs` directory.
 
-**Why:** The first package installation attempt failed because the base Python environment was immutable and had no pip; installing the managed runtime enabled the package manager to install dependencies into the project environment.
+**Why:** The imported bot runs from a subdirectory, while Replit's managed Python environment is provisioned at the workspace level. The shared interpreter remains available after `cd` into the imported project.
 
-**How to apply:** For imported Python projects, check the available Python modules early and install a compatible managed runtime before installing `requirements.txt`.
+**How to apply:** Keep the workflow command directory-aware (`cd <project> && python app.py`), use the managed installer for dependencies, and verify imports from that exact workflow command before debugging application code.

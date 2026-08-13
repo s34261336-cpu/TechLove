@@ -9,6 +9,7 @@ from datetime import datetime
 from collections import defaultdict
 import time
 import aiohttp
+from html import escape as html_escape
 from urllib.parse import quote as url_quote
 from io import BytesIO
 import base64
@@ -717,6 +718,63 @@ user_spam_warned: dict[int, float] = {}
 class RateLimitError(Exception):
     """Raised when the upstream provider returns a 429 rate-limit error."""
     pass
+
+
+# ─── Modern progress indicators ──────────────────────────────────────────────
+
+LOADING_FRAMES = ("◌", "◔", "◑", "◕", "◑", "◔")
+LOADING_INTERVAL = 1.4
+
+
+def loading_text(stage: str, subtitle: str = "", frame: str = "◌") -> str:
+    """Build the compact status message used while a long task is running."""
+    text = f"{frame} <b>{stage}</b>"
+    if subtitle:
+        text += f"\n\n<i>{subtitle}</i>"
+    return text
+
+
+async def animate_loading(
+    message: Message,
+    stages: tuple[str, ...],
+    subtitle: str = "",
+    action: str = "typing",
+    interval: float = LOADING_INTERVAL,
+) -> None:
+    """Keep a single status message alive without spamming new messages."""
+    index = 0
+    try:
+        while True:
+            frame = LOADING_FRAMES[index % len(LOADING_FRAMES)]
+            stage = stages[index % len(stages)]
+            try:
+                await message.bot.send_chat_action(message.chat.id, action)
+                await message.edit_text(
+                    loading_text(stage, subtitle, frame),
+                    parse_mode=ParseMode.HTML,
+                )
+            except TelegramBadRequest as exc:
+                # Telegram returns this when a frame is identical to the last one.
+                if "not modified" not in str(exc).lower():
+                    logger.debug("Loading status edit skipped: %s", exc)
+            except Exception as exc:
+                # A temporary network hiccup should not interrupt the main task.
+                logger.debug("Loading status update failed: %s", exc)
+            index += 1
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        raise
+
+
+async def stop_loading(task: asyncio.Task | None) -> None:
+    """Stop a progress task cleanly before showing the final result."""
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 # ─── FSM States ──────────────────────────────────────────────────────────────
@@ -2276,7 +2334,10 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("🎨 Создаю...")
     await callback.message.edit_text(
-        f"⏳ <b>Перевожу описание...</b>\n\n<i>{prompt}</i>",
+        loading_text(
+            "Готовлю изображение",
+            "Адаптирую описание под генератор",
+        ),
         parse_mode=ParseMode.HTML
     )
 
@@ -2286,7 +2347,10 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
 
         await callback.message.edit_text(
-            f"🎨 <b>Отправляю в очередь...</b>\n\n<i>{prompt}</i>",
+            loading_text(
+                "Изображение в очереди",
+                "Подбираю свободный GPU для рендера",
+            ),
             parse_mode=ParseMode.HTML
         )
 
@@ -2330,8 +2394,8 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
             # Poll for completion (max 4 min)
             img_bytes = None
-            for tick in range(48):
-                await asyncio.sleep(5)
+            for tick in range(80):
+                await asyncio.sleep(3)
                 async with http.get(
                     f"{HORDE_URL}/generate/check/{job_id}",
                     headers=horde_headers,
@@ -2348,9 +2412,11 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 queue_pos = check.get("queue_position", "?")
                 try:
                     await callback.message.edit_text(
-                        f"🎨 <b>Рисую...</b>\n\n"
-                        f"<i>{prompt}</i>\n\n"
-                        f"⏱ ~{wait_time}с · позиция в очереди: {queue_pos}",
+                        loading_text(
+                            "Рендерю изображение",
+                            f"Примерно {wait_time} сек. · позиция {queue_pos}",
+                            LOADING_FRAMES[tick % len(LOADING_FRAMES)],
+                        ),
                         parse_mode=ParseMode.HTML,
                     )
                 except TelegramBadRequest:
@@ -2479,8 +2545,20 @@ async def call_ai(session: dict, user_message: str) -> str:
     }
     try:
         async with aiohttp.ClientSession() as http:
-            async with http.post(api_url, json=payload, headers=headers) as resp:
-                data = await resp.json()
+            async with http.post(
+                api_url,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=90, connect=10, sock_read=90),
+            ) as resp:
+                # Never leave a user-facing progress message spinning forever.
+                data = await resp.json(content_type=None)
+                if resp.status >= 400 and "choices" not in data:
+                    err = data.get("error", {})
+                    error_msg = err.get("message", f"HTTP {resp.status}")
+                    if resp.status == 429:
+                        raise RateLimitError(MODELS[session["model"]]["name"])
+                    raise ValueError(error_msg)
         if "choices" not in data:
             err = data.get("error", {})
             code = err.get("code") or data.get("code")
@@ -2591,7 +2669,18 @@ async def handle_photo(message: Message):
     user_id = message.from_user.id
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
 
-    thinking = await message.answer("👁 <i>Смотрю на фото...</i>", parse_mode=ParseMode.HTML)
+    thinking = await message.answer(
+        loading_text("Анализирую фото", "Рассматриваю детали изображения"),
+        parse_mode=ParseMode.HTML,
+    )
+    loading_task = asyncio.create_task(
+        animate_loading(
+            thinking,
+            ("Смотрю на изображение", "Выделяю важные детали", "Готовлю описание"),
+            subtitle="Анализирую изображение",
+            action="upload_photo",
+        )
+    )
 
     try:
         # Download the photo and encode as base64
@@ -2608,6 +2697,8 @@ async def handle_photo(message: Message):
             user_question = f"{cap}\n\nОтвечай на русском языке."
 
         description = await describe_image(image_bytes, user_question)
+        await stop_loading(loading_task)
+        loading_task = None
         # Edit the thinking message instead of delete+answer
         # so a network hiccup on answer() can't leave the user with nothing
         try:
@@ -2620,13 +2711,18 @@ async def handle_photo(message: Message):
 
     except Exception as e:
         logger.error(f"Vision error for user {user_id}: {e}")
+        await stop_loading(loading_task)
+        loading_task = None
         try:
             await thinking.edit_text(
-                "❌ <b>Не удалось проанализировать фото.</b>\n\nПопробуйте ещё раз.",
+                "⚠️ <b>Не удалось проанализировать фото</b>\n\n"
+                "Попробуйте ещё раз — иногда изображение не успевает загрузиться.",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
             await message.answer("❌ Не удалось проанализировать фото. Попробуйте ещё раз.")
+    finally:
+        await stop_loading(loading_task)
 
 
 # ─── Cases: FSM message handlers (must be before generic F.text handler) ─────
@@ -2800,9 +2896,19 @@ async def handle_voice(message: Message):
     user_id = message.from_user.id
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
     status = await message.answer(
-        "🎙️ <i>Распознаю голосовое локально...</i>\n"
-        "Первое голосовое может обрабатываться дольше: загружается бесплатная Whisper-модель.",
+        loading_text(
+            "Распознаю голосовое",
+            "Первый запуск может занять немного больше времени",
+        ),
         parse_mode=ParseMode.HTML,
+    )
+    loading_task = asyncio.create_task(
+        animate_loading(
+            status,
+            ("Загружаю аудио", "Слушаю запись", "Перевожу речь в текст"),
+            subtitle="Whisper работает локально",
+            action="record_voice",
+        )
     )
 
     try:
@@ -2814,16 +2920,25 @@ async def handle_voice(message: Message):
         preview = text
         if len(preview) > 3500:
             preview = preview[:3500].rstrip() + "…"
-        await status.edit_text(f"📝 Распознано:\n\n{preview}")
+        await stop_loading(loading_task)
+        loading_task = None
+        await status.edit_text(
+            f"📝 <b>Готово</b>\n\n{html_escape(preview)}",
+            parse_mode=ParseMode.HTML,
+        )
 
         # Send the transcription through the existing AI conversation flow.
         await process_text_message(message, text)
     except Exception as e:
         logger.error("Voice transcription error for user %s: %s", user_id, e, exc_info=True)
+        await stop_loading(loading_task)
+        loading_task = None
         await status.edit_text(
-            "❌ Не удалось распознать голосовое сообщение.\n\n"
+            "⚠️ <b>Не удалось распознать голосовое сообщение</b>\n\n"
             "Попробуйте записать его ещё раз короче и без сильного фонового шума."
         )
+    finally:
+        await stop_loading(loading_task)
 
 
 @router.message(F.text)
@@ -2888,25 +3003,24 @@ async def process_text_message(message: Message, text: str):
             return
 
     thinking_msg = await message.answer(
-        f"⏳ <i>{model['emoji_html']} {model['name']} думает...</i>",
-        parse_mode=ParseMode.HTML
+        loading_text(
+            "Готовлю ответ",
+            f"{model['emoji_html']} {model['name']} · {role['name']}",
+        ),
+        parse_mode=ParseMode.HTML,
     )
-
-    # Keep "typing..." indicator alive for the full duration of the AI call
-    typing_active = True
-
-    async def keep_typing():
-        while typing_active:
-            try:
-                await message.bot.send_chat_action(message.chat.id, "typing")
-            except Exception:
-                pass
-            await asyncio.sleep(4)
-
-    typing_task = asyncio.create_task(keep_typing())
+    loading_task = asyncio.create_task(
+        animate_loading(
+            thinking_msg,
+            ("Собираю контекст", "Формулирую мысль", "Проверяю ответ", "Почти готово"),
+            subtitle=f"{model['emoji_html']} {model['name']} · {role['name']}",
+        )
+    )
 
     try:
         reply = await call_ai(session, text)
+        await stop_loading(loading_task)
+        loading_task = None
 
         header = f"<i>{role['emoji_html']} {role['name']} · {model['name']}</i>"
 
@@ -2922,8 +3036,10 @@ async def process_text_message(message: Message, text: str):
 
     except RateLimitError as e:
         logger.warning(f"Rate limit for user {user_id}: {e}")
+        await stop_loading(loading_task)
+        loading_task = None
         await thinking_msg.edit_text(
-            f"⏳ <b>Модель {e} перегружена.</b>\n\n"
+            f"⚠️ <b>Модель {e} сейчас перегружена</b>\n\n"
             f"Бесплатный лимит запросов временно исчерпан у провайдера. "
             f"Подождите минуту и попробуйте снова, или выберите другую модель.\n\n"
             f"🤖 /model — сменить модель",
@@ -2931,18 +3047,17 @@ async def process_text_message(message: Message, text: str):
         )
     except Exception as e:
         logger.error(f"AI error for user {user_id}: {e}")
+        await stop_loading(loading_task)
+        loading_task = None
         err = str(e)[:300]
         await thinking_msg.edit_text(
-            f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
+            f"⚠️ <b>Не получилось получить ответ</b>\n\n"
+            f"<code>{html_escape(err)}</code>\n\n"
+            "Попробуйте сменить модель через /model или начать новый диалог /new.",
             parse_mode=ParseMode.HTML
         )
     finally:
-        typing_active = False
-        typing_task.cancel()
-        try:
-            await typing_task
-        except asyncio.CancelledError:
-            pass
+        await stop_loading(loading_task)
 
 
 # ─── Cases: keyboards ────────────────────────────────────────────────────────
@@ -3041,9 +3156,8 @@ def _reel(emojis: list[str] | None = None) -> str:
 
 def _slot_frame(row: str, stage: str) -> str:
     return (
-        f"╔═══════════════╗\n"
-        f"║  {row}  ║\n"
-        f"╚═══════════════╝\n\n"
+        f"🎁 <b>Открываем кейс</b>\n\n"
+        f"<code>{row}</code>\n\n"
         f"<i>{stage}</i>"
     )
 
@@ -3153,49 +3267,52 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
     prize = pick_prize()
     prize_emoji = PRIZE_REEL_EMOJI.get(prize["type"], {}).get(prize["value"], prize["emoji"])
 
-    await callback.answer("🎰 Крутим барабаны...")
+    await callback.answer("🎁 Открываем кейс...")
 
     anim_msg = await bot.send_message(
         chat_id=callback.message.chat.id,
-        text=_slot_frame(_reel(), "⏳ Подготовка..."),
+        text=_slot_frame(_reel(), "Выбираем приз"),
         parse_mode=ParseMode.HTML,
     )
 
-    # Stage 1 — fast spin (0.22 s)
+    # Stage 1 — fast spin
     for _ in range(5):
-        await asyncio.sleep(0.22)
+        await asyncio.sleep(0.18)
         try:
             await anim_msg.edit_text(
-                _slot_frame(_reel(), "⚡ Барабаны крутятся..."),
+                _slot_frame(_reel(), "Быстро прокручиваем варианты"),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
             pass
 
-    # Stage 2 — slowing (0.38 s)
+    # Stage 2 — slowing
     slow_pool = _REEL_POOL + [prize_emoji]
     for i in range(4):
-        await asyncio.sleep(0.38)
+        await asyncio.sleep(0.30)
         try:
             await anim_msg.edit_text(
-                _slot_frame(_reel(slow_pool), "🔄 Замедляемся..."),
+                _slot_frame(_reel(slow_pool), "Плавно замедляемся"),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
             pass
 
-    # Stage 3 — almost stopped (0.55 s), 2 reels lock
-    await asyncio.sleep(0.55)
+    # Stage 3 — almost stopped, 2 reels lock
+    await asyncio.sleep(0.45)
     try:
         await anim_msg.edit_text(
-            _slot_frame(f"{prize_emoji} │ {random.choice(_REEL_POOL)} │ {prize_emoji}", "⏸ Стоп..."),
+            _slot_frame(
+                f"{prize_emoji} │ {random.choice(_REEL_POOL)} │ {prize_emoji}",
+                "Фиксируем результат",
+            ),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
         pass
 
     # Stage 4 — all locked on prize emoji
-    await asyncio.sleep(0.65)
+    await asyncio.sleep(0.50)
     try:
         await anim_msg.edit_text(
             _slot_frame(f"{prize_emoji} │ {prize_emoji} │ {prize_emoji}", "🔒 Результат!"),
