@@ -51,10 +51,12 @@ _whisper_model = None
 _whisper_model_lock = threading.Lock()
 
 ADMIN_ID = 5814345235
-USERS_FILE = "users_data.json"
-MODELS_FILE = "models_data.json"
-CASES_FILE = "cases_data.json"
-REMINDERS_FILE = "reminders_data.json"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+USERS_FILE = os.path.join(PROJECT_DIR, "users_data.json")
+MODELS_FILE = os.path.join(PROJECT_DIR, "models_data.json")
+CASES_FILE = os.path.join(PROJECT_DIR, "cases_data.json")
+REMINDERS_FILE = os.path.join(PROJECT_DIR, "reminders_data.json")
+LEGACY_REMINDERS_FILE = os.path.abspath("reminders_data.json")
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 REMINDER_CHECK_INTERVAL = 15
 
@@ -582,15 +584,40 @@ REMINDER_INTENT_RE = re.compile(
 
 
 def load_reminders() -> list[dict]:
-    if not os.path.exists(REMINDERS_FILE):
-        return []
-    try:
-        with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        logger.exception("Не удалось загрузить напоминания")
-        return []
+    candidates = [REMINDERS_FILE]
+    if LEGACY_REMINDERS_FILE != REMINDERS_FILE:
+        candidates.append(LEGACY_REMINDERS_FILE)
+
+    reminders: list[dict] = []
+    seen_ids: set[str] = set()
+    loaded_legacy = False
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.exception("Не удалось загрузить напоминания из %s", path)
+            continue
+        if not isinstance(data, list):
+            continue
+        if path == LEGACY_REMINDERS_FILE and path != REMINDERS_FILE:
+            loaded_legacy = True
+        for reminder in data:
+            if not isinstance(reminder, dict):
+                continue
+            reminder_id = str(reminder.get("id", ""))
+            if reminder_id and reminder_id in seen_ids:
+                continue
+            if reminder_id:
+                seen_ids.add(reminder_id)
+            reminders.append(reminder)
+
+    if loaded_legacy and reminders:
+        save_reminders(reminders)
+        logger.info("Перенёс напоминания из старого расположения в %s", REMINDERS_FILE)
+    return reminders
 
 
 def save_reminders(data: list[dict]) -> None:
@@ -796,7 +823,7 @@ def get_user_reminders(user_id: int) -> list[dict]:
     reminders = [
         reminder
         for reminder in load_reminders()
-        if reminder.get("user_id") == user_id and not reminder.get("sent_at")
+        if str(reminder.get("user_id")) == str(user_id) and not reminder.get("sent_at")
     ]
     return sorted(
         reminders,
