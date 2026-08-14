@@ -779,6 +779,73 @@ def format_web_search_results(query: str, results: list[dict[str, str]]) -> str:
     return text
 
 
+async def summarize_web_search(query: str, results: list[dict[str, str]]) -> str:
+    """Turn search snippets into one short answer without exposing source links."""
+    if not results:
+        return (
+            "По этому запросу не удалось найти подходящую информацию. "
+            "Попробуйте сформулировать вопрос немного иначе."
+        )
+
+    source_text = "\n\n".join(
+        f"Заголовок: {result.get('title', '')}\n"
+        f"Фрагмент: {result.get('snippet', '')}"
+        for result in results
+        if result.get("snippet") or result.get("title")
+    )
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты кратко отвечаешь на вопросы по найденным в интернете материалам. "
+                    "Ответь только на русском языке, одним коротким абзацем из 2–4 предложений. "
+                    "Не упоминай сайты и источники, не добавляй ссылки, markdown, заголовки "
+                    "или фразы вроде «по данным поиска». Если информации недостаточно, "
+                    "честно скажи об этом и не выдумывай факты."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Вопрос пользователя: {query}\n\nНайденные материалы:\n{source_text}",
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 220,
+    }
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                GROQ_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as response:
+                data = await response.json(content_type=None)
+                if response.status >= 400:
+                    raise ValueError(f"Groq HTTP {response.status}")
+        summary = data["choices"][0]["message"]["content"].strip()
+        summary = re.sub(r"https?://\S+", "", summary)
+        summary = re.sub(r"\n{3,}", "\n\n", summary).strip()
+        if summary:
+            return summary
+    except Exception:
+        logger.exception("Не удалось кратко пересказать результаты поиска")
+
+    fallback = " ".join(
+        result.get("snippet", "").strip()
+        for result in results
+        if result.get("snippet")
+    )
+    return fallback[:900].rstrip() + ("…" if len(fallback) > 900 else "")
+
+
 def load_reminders() -> list[dict]:
     candidates = [REMINDERS_FILE]
     if LEGACY_REMINDERS_FILE != REMINDERS_FILE:
@@ -3590,8 +3657,9 @@ async def process_text_message(message: Message, text: str):
         status = await message.answer("🔎 Ищу информацию в интернете…")
         try:
             results = await search_web(query)
+            summary = await summarize_web_search(query, results)
             await status.edit_text(
-                format_web_search_results(query, results),
+                f"🔎 <b>Коротко:</b>\n\n{html_escape(summary)}",
                 parse_mode=ParseMode.HTML,
             )
             logger.info("Поиск завершён: user=%s results=%s", user_id, len(results))
