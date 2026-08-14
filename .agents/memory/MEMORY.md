@@ -1,3 +1,4 @@
+- [Imported Replit workflows](imported-replit-workflows.md) — nested artifact manifests may auto-register duplicate workflows after a GitHub import.
 - [Python runtime setup](python-runtime-setup.md) — use a full Python tools module when the base interpreter rejects dependency installation.
 - [Imported Python runtime](python-runtime-import.md) — check for a managed Python runtime before installing dependencies for imported applications.
 - [Web search provider](web-search-provider.md) — prefer Bing HTML results with DuckDuckGo as fallback; DDG can return HTTP 200 with no parsed results here.
