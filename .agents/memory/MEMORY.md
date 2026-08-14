@@ -1,1 +1,2 @@
 - [Python runtime imports](python-runtime-import.md) — use a managed Python runtime before installing dependencies for imported apps.
+- [Web search provider](web-search-provider.md) — prefer Bing HTML results with DuckDuckGo as fallback; DDG can return HTTP 200 with no parsed results here.

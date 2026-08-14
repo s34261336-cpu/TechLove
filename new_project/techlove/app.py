@@ -12,8 +12,9 @@ import time
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 import aiohttp
-from html import escape as html_escape
-from urllib.parse import quote as url_quote
+from html import escape as html_escape, unescape as html_unescape
+from html.parser import HTMLParser
+from urllib.parse import quote as url_quote, parse_qs, urlencode, urlparse
 from io import BytesIO
 import base64
 
@@ -582,6 +583,200 @@ REMINDER_INTENT_RE = re.compile(
     r"(?:мне\s+)?(?:напомни|напоминание|напомнить)(?:\s+мне)?\b",
     re.IGNORECASE,
 )
+WEB_SEARCH_INTENT_RE = re.compile(
+    r"^\s*(?:найди|поищи|искать|проверить)\s+"
+    r"(?:(?:в\s+)?(?:интернете|сети)|онлайн)\s+(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+class _DuckDuckGoResultParser(HTMLParser):
+    """Extract titles, snippets and URLs from DuckDuckGo's HTML results."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict[str, str]] = []
+        self._active: str | None = None
+        self._active_result: dict[str, str] | None = None
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag == "a" and "result__a" in classes:
+            self._active = "title"
+            self._parts = []
+            self._active_result = {
+                "title": "",
+                "url": _normalise_search_url(attributes.get("href") or ""),
+                "snippet": "",
+            }
+        elif "result__snippet" in classes:
+            self._active = "snippet"
+            self._parts = []
+            if self._active_result is None and self.results:
+                self._active_result = self.results[-1]
+
+    def handle_data(self, data: str) -> None:
+        if self._active:
+            self._parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._active == "title" and tag == "a" and self._active_result is not None:
+            self._active_result["title"] = html_unescape("".join(self._parts)).strip()
+            self.results.append(self._active_result)
+            self._active = None
+            self._active_result = None
+            self._parts = []
+        elif self._active == "snippet" and tag in {"a", "div"} and self._active_result is not None:
+            self._active_result["snippet"] = html_unescape("".join(self._parts)).strip()
+            self._active = None
+            self._active_result = None
+            self._parts = []
+
+
+class _BingResultParser(HTMLParser):
+    """Extract the first search results from Bing's HTML response."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict[str, str]] = []
+        self._result_depth = 0
+        self._active: str | None = None
+        self._parts: list[str] = []
+        self._current: dict[str, str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag == "li" and "b_algo" in classes and not self._result_depth:
+            self._result_depth = 1
+            self._current = {"title": "", "url": "", "snippet": ""}
+            self._active = None
+            self._parts = []
+            return
+        if not self._result_depth:
+            return
+
+        self._result_depth += 1
+        if tag == "h2":
+            self._active = "title"
+            self._parts = []
+        elif tag == "a" and self._active == "title" and self._current is not None:
+            self._current["url"] = _normalise_search_url(attributes.get("href") or "")
+        elif tag == "p":
+            self._active = "snippet"
+            self._parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._active:
+            self._parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._result_depth:
+            return
+        if self._active == "title" and tag == "h2" and self._current is not None:
+            self._current["title"] = html_unescape("".join(self._parts)).strip()
+            self._active = None
+            self._parts = []
+        elif self._active == "snippet" and tag == "p" and self._current is not None:
+            self._current["snippet"] = html_unescape("".join(self._parts)).strip()
+            self._active = None
+            self._parts = []
+
+        self._result_depth -= 1
+        if tag == "li" and self._result_depth == 0 and self._current is not None:
+            if self._current.get("title") and self._current.get("url"):
+                self.results.append(self._current)
+            self._current = None
+
+
+def _normalise_search_url(url: str) -> str:
+    if url.startswith("//"):
+        url = f"https:{url}"
+    parsed = urlparse(url)
+    if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+        url = parse_qs(parsed.query).get("uddg", [url])[0]
+    return url
+
+
+async def _fetch_bing_results(
+    session: aiohttp.ClientSession,
+    query: str,
+) -> list[dict[str, str]]:
+    async with session.get(
+        "https://www.bing.com/search",
+        params={"q": query, "setlang": "ru"},
+    ) as response:
+        response.raise_for_status()
+        html = await response.text(errors="replace")
+    parser = _BingResultParser()
+    parser.feed(html)
+    return parser.results[:5]
+
+
+async def _fetch_duckduckgo_results(
+    session: aiohttp.ClientSession,
+    query: str,
+) -> list[dict[str, str]]:
+    params = urlencode({"q": query, "kl": "ru-ru", "hl": "ru-ru"})
+    url = f"https://html.duckduckgo.com/html/?{params}"
+    async with session.get(url) as response:
+        response.raise_for_status()
+        html = await response.text(errors="replace")
+    parser = _DuckDuckGoResultParser()
+    parser.feed(html)
+    return [
+        result
+        for result in parser.results
+        if result.get("title") and result.get("url")
+    ][:5]
+
+
+async def search_web(query: str) -> list[dict[str, str]]:
+    """Search the public web and return short result excerpts."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; ZenoAI Telegram Bot/1.0)",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.5",
+    }
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+        try:
+            results = await _fetch_bing_results(session, query)
+            if results:
+                return results
+        except Exception:
+            logger.exception("Основной поиск Bing недоступен")
+
+        try:
+            return await _fetch_duckduckgo_results(session, query)
+        except Exception:
+            logger.exception("Резервный поиск DuckDuckGo недоступен")
+            return []
+
+
+def format_web_search_results(query: str, results: list[dict[str, str]]) -> str:
+    if not results:
+        return (
+            "🔎 <b>Поиск не дал результатов</b>\n\n"
+            f"Запрос: <i>{html_escape(query)}</i>\n"
+            "Попробуйте сформулировать вопрос подробнее."
+        )
+
+    blocks = [
+        "🔎 <b>Результаты поиска</b>",
+        f"<i>{html_escape(query)}</i>",
+    ]
+    for index, result in enumerate(results, start=1):
+        title = html_escape(result["title"])
+        snippet = html_escape(result.get("snippet") or "Описание отсутствует.")
+        url = html_escape(result["url"])
+        blocks.append(f"<b>{index}. {title}</b>\n{snippet}\n{url}")
+
+    text = "\n\n".join(blocks)
+    if len(text) > 3900:
+        text = text[:3890].rstrip() + "…"
+    return text
 
 
 def load_reminders() -> list[dict]:
@@ -3379,6 +3574,33 @@ async def process_text_message(message: Message, text: str):
 
     # Track user activity
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
+
+    search_match = WEB_SEARCH_INTENT_RE.match(text)
+    if search_match:
+        query = search_match.group(1).strip(" \t\n,;:.!?")
+        if not query:
+            await message.answer(
+                "🔎 Напишите, что найти. Например: "
+                "<i>Найди в интернете что такое день</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        logger.info("Поиск в интернете: user=%s query_length=%s", user_id, len(query))
+        status = await message.answer("🔎 Ищу информацию в интернете…")
+        try:
+            results = await search_web(query)
+            await status.edit_text(
+                format_web_search_results(query, results),
+                parse_mode=ParseMode.HTML,
+            )
+            logger.info("Поиск завершён: user=%s results=%s", user_id, len(results))
+        except Exception:
+            logger.exception("Ошибка поиска в интернете для user=%s", user_id)
+            await status.edit_text(
+                "⚠️ Не удалось выполнить поиск сейчас. Попробуйте ещё раз через минуту."
+            )
+        return
 
     if REMINDER_INTENT_RE.match(text):
         task, due, error = parse_reminder_request(text)
