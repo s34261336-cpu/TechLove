@@ -3154,8 +3154,9 @@ async def summarize_search_results(query: str, results: list[dict[str, str]]) ->
                     "Ты редактор кратких ответов на русском языке. "
                     "Отвечай только по данным из источников. "
                     "Сделай сжатый ответ до 900 символов: 2–4 коротких абзаца "
-                    "или маркированных пункта. Указывай ссылки на источники "
-                    "в формате [1], [2]. Если данных недостаточно, честно скажи об этом."
+                    "или маркированных пункта. Не добавляй ссылки, номера источников, "
+                    "служебные пометки и непонятные обозначения. Если данных "
+                    "недостаточно, честно скажи об этом."
                 ),
             },
             {
@@ -3188,12 +3189,13 @@ async def summarize_search_results(query: str, results: list[dict[str, str]]) ->
     if not summary:
         raise ValueError("Не удалось подготовить краткий ответ.")
 
-    source_lines = "\n".join(
-        f"[{index}] {item['title']}: {item['url']}"
-        for index, item in enumerate(results[:3], start=1)
-    )
-    answer = f"🔎 По запросу: {query}\n\n{summary}\n\nИсточники:\n{source_lines}"
-    return answer[:4090]
+    # Remove citation artifacts or URLs if the model included them despite the prompt.
+    summary = re.sub(r"\[\d+\]", "", summary)
+    summary = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", summary)
+    summary = re.sub(r"https?://\S+", "", summary)
+    summary = re.sub(r"[ \t]{2,}", " ", summary)
+    summary = re.sub(r"\n{3,}", "\n\n", summary).strip()
+    return summary[:4090]
 
 
 async def start_search(message: Message, state: FSMContext):
