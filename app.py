@@ -14,6 +14,7 @@ import aiohttp
 from urllib.parse import quote as url_quote
 from io import BytesIO
 import base64
+from html.parser import HTMLParser
 
 from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher, F, Router
@@ -998,6 +999,10 @@ class CaseStates(StatesGroup):
     waiting_case_limit = State()
 
 
+class SearchStates(StatesGroup):
+    waiting_query = State()
+
+
 # ─── Anti-spam middleware ─────────────────────────────────────────────────────
 
 class AntiSpamMiddleware(BaseMiddleware):
@@ -1109,6 +1114,7 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🤖 Модель"), KeyboardButton(text="🎭 Роль")],
         [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
         [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="🔎 Найди в интернете")],
         [KeyboardButton(text="ℹ️ Помощь")],
     ]
     if user_id == ADMIN_ID:
@@ -1385,6 +1391,7 @@ async def cmd_help(message: Message):
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
         "🎨 <b>Нейро-фото</b> — генерация картинок по описанию\n"
+        "🔎 <b>Найди в интернете</b> — поиск актуальной информации с коротким ответом\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
         "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
@@ -1394,6 +1401,7 @@ async def cmd_help(message: Message):
         "/model — сменить модель\n"
         "/role — сменить роль\n"
         "/img — генератор изображений\n"
+        "/search — поиск в интернете\n"
         "/status — текущие настройки\n"
         "/profile — мой профиль\n"
         "/help — помощь"
@@ -2992,6 +3000,252 @@ async def fsm_case_limit(message: Message, state: FSMContext):
     )
 
 
+# ─── Internet search ──────────────────────────────────────────────────────────
+
+SEARCH_TRIGGER = "найди в интернете"
+SEARCH_MAX_RESULTS = 5
+SEARCH_MAX_QUERY_LENGTH = 300
+SEARCH_RESULT_CHARS = 900
+
+
+def _clean_search_text(value: str) -> str:
+    value = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+class SearchResultsParser(HTMLParser):
+    """Parse the small result blocks used by Bing and DuckDuckGo HTML pages."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict[str, str]] = []
+        self.current: dict[str, str] | None = None
+        self.block_tag: str | None = None
+        self.block_depth = 0
+        self.capture: str | None = None
+        self.capture_tag: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        attrs_dict = dict(attrs)
+        classes = set((attrs_dict.get("class") or "").split())
+
+        if self.current is None:
+            if tag == "li" and "b_algo" in classes:
+                self.current = {"title": "", "url": "", "snippet": ""}
+                self.block_tag = tag
+                self.block_depth = 1
+                return
+            if tag == "div" and "result" in classes:
+                self.current = {"title": "", "url": "", "snippet": ""}
+                self.block_tag = tag
+                self.block_depth = 1
+                return
+
+        if self.current is None:
+            return
+
+        self.block_depth += 1
+        href = attrs_dict.get("href") or ""
+        if tag == "a" and href and not self.current["url"]:
+            if "result__a" in classes or self.block_tag == "li":
+                self.current["url"] = href
+
+        if tag == "h2" and self.block_tag == "li":
+            self.capture = "title"
+            self.capture_tag = tag
+        elif tag == "a" and "result__a" in classes:
+            self.capture = "title"
+            self.capture_tag = tag
+        elif "result__snippet" in classes:
+            self.capture = "snippet"
+            self.capture_tag = tag
+        elif tag == "p" and self.block_tag == "li":
+            self.capture = "snippet"
+            self.capture_tag = tag
+
+    def handle_data(self, data: str):
+        if self.current is not None and self.capture:
+            self.current[self.capture] += data
+
+    def handle_endtag(self, tag: str):
+        if self.current is None:
+            return
+        if tag == self.capture_tag:
+            self.capture = None
+            self.capture_tag = None
+        self.block_depth -= 1
+        if self.block_depth <= 0 and tag == self.block_tag:
+            self._finish_current()
+
+    def _finish_current(self):
+        if self.current:
+            title = _clean_search_text(self.current["title"])
+            url = self.current["url"].strip()
+            snippet = _clean_search_text(self.current["snippet"])
+            if title and url.startswith(("http://", "https://")):
+                self.results.append({
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet[:SEARCH_RESULT_CHARS],
+                })
+        self.current = None
+        self.block_tag = None
+        self.block_depth = 0
+        self.capture = None
+        self.capture_tag = None
+
+
+async def search_web(query: str) -> list[dict[str, str]]:
+    """Fetch current web results without requiring another API key."""
+    encoded_query = url_quote(query, safe="")
+    search_urls = (
+        f"https://www.bing.com/search?q={encoded_query}&count={SEARCH_MAX_RESULTS}&setlang=ru",
+        f"https://html.duckduckgo.com/html/?q={encoded_query}&kl=ru-ru",
+    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.7",
+    }
+    errors = []
+
+    async with aiohttp.ClientSession(headers=headers) as http:
+        for search_url in search_urls:
+            try:
+                async with http.get(
+                    search_url,
+                    timeout=aiohttp.ClientTimeout(total=12),
+                    allow_redirects=True,
+                ) as response:
+                    if response.status != 200:
+                        errors.append(f"HTTP {response.status}")
+                        continue
+                    page = await response.text(errors="ignore")
+
+                parser = SearchResultsParser()
+                parser.feed(page)
+                results = parser.results[:SEARCH_MAX_RESULTS]
+                if results:
+                    logger.info("Web search returned %s results", len(results))
+                    return results
+                errors.append("результаты не найдены")
+            except Exception as error:
+                logger.warning("Web search provider failed: %s", error)
+                errors.append(str(error))
+
+    raise ValueError("Сервисы поиска временно не вернули результаты.")
+
+
+async def summarize_search_results(query: str, results: list[dict[str, str]]) -> str:
+    """Summarize search snippets with the existing Groq key and model."""
+    sources = "\n\n".join(
+        f"[{index}] {item['title']}\n{item['snippet'] or 'Описание отсутствует.'}\n"
+        f"Источник: {item['url']}"
+        for index, item in enumerate(results, start=1)
+    )
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты редактор кратких ответов на русском языке. "
+                    "Отвечай только по данным из источников. "
+                    "Сделай сжатый ответ до 900 символов: 2–4 коротких абзаца "
+                    "или маркированных пункта. Указывай ссылки на источники "
+                    "в формате [1], [2]. Если данных недостаточно, честно скажи об этом."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Запрос: {query}\n\nРезультаты поиска:\n{sources}",
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 500,
+    }
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    async with aiohttp.ClientSession() as http:
+        async with http.post(
+            GROQ_API_URL,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=25),
+        ) as response:
+            data = await response.json()
+
+    if "choices" not in data:
+        error = data.get("error", {}).get("message", "Groq не вернул ответ")
+        raise ValueError(error)
+
+    summary = data["choices"][0]["message"].get("content", "").strip()
+    if not summary:
+        raise ValueError("Не удалось подготовить краткий ответ.")
+
+    source_lines = "\n".join(
+        f"[{index}] {item['title']}: {item['url']}"
+        for index, item in enumerate(results[:3], start=1)
+    )
+    answer = f"🔎 По запросу: {query}\n\n{summary}\n\nИсточники:\n{source_lines}"
+    return answer[:4090]
+
+
+async def start_search(message: Message, state: FSMContext):
+    await state.set_state(SearchStates.waiting_query)
+    await message.answer(
+        "🔎 Напиши запрос, который нужно найти в интернете.\n"
+        "Например: <i>какая погода будет в Москве завтра</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def run_search(message: Message, state: FSMContext, query: str):
+    query = query.strip()
+    await state.clear()
+    if not query:
+        await message.answer("Напиши сам запрос для поиска.")
+        return
+    if len(query) > SEARCH_MAX_QUERY_LENGTH:
+        await message.answer(
+            f"Сделай запрос короче {SEARCH_MAX_QUERY_LENGTH} символов."
+        )
+        return
+
+    status = await message.answer("🔎 Ищу информацию в интернете…")
+    try:
+        results = await search_web(query)
+        answer = await summarize_search_results(query, results)
+        await status.edit_text(answer, parse_mode=None)
+    except Exception as error:
+        logger.error("Web search error for user %s: %s", message.from_user.id, error)
+        await status.edit_text(
+            "❌ Не удалось выполнить поиск прямо сейчас.\n"
+            "Попробуй изменить запрос и повторить позже."
+        )
+
+
+@router.message(Command("search"))
+async def cmd_search(message: Message, state: FSMContext):
+    await start_search(message, state)
+
+
+@router.message(F.text == "🔎 Найди в интернете")
+@router.message(F.text == "Найди в интернете")
+async def search_button(message: Message, state: FSMContext):
+    await start_search(message, state)
+
+
+@router.message(SearchStates.waiting_query, F.text)
+async def fsm_search_query(message: Message, state: FSMContext):
+    await run_search(message, state, message.text or "")
+
+
 # ─── Reminders and message handler ────────────────────────────────────────────
 
 @router.message(Command("reminders"))
@@ -3121,7 +3375,17 @@ async def handle_voice(message: Message):
 
 
 @router.message(F.text)
-async def handle_message(message: Message):
+async def handle_message(message: Message, state: FSMContext):
+    message_text = (message.text or "").strip()
+    lower_text = message_text.casefold()
+    if lower_text == SEARCH_TRIGGER:
+        await start_search(message, state)
+        return
+    if lower_text.startswith(f"{SEARCH_TRIGGER} "):
+        # Also accept the convenient one-message format:
+        # "Найди в интернете последние новости о ..."
+        await run_search(message, state, message_text[len(SEARCH_TRIGGER):])
+        return
     reminder, parse_error = parse_reminder_request(message.text or "")
     if parse_error:
         await message.answer(f"❌ {parse_error}")
@@ -3809,6 +4073,7 @@ async def set_commands(bot: Bot):
         BotCommand(command="model",   description="Выбрать модель ИИ"),
         BotCommand(command="role",    description="Выбрать роль ассистента"),
         BotCommand(command="img",     description="Сгенерировать изображение"),
+        BotCommand(command="search",  description="Поиск в интернете"),
         BotCommand(command="vision",  description="Анализ фото — что на нём"),
         BotCommand(command="status",  description="Текущие настройки"),
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
