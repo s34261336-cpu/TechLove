@@ -263,13 +263,16 @@ SYSTEM_PROMPTS = {
 }
 
 COMMON_INSTRUCTIONS = (
+    "Эти правила обязательны для каждого ответа, независимо от выбранной модели, провайдера и роли. "
     "Общайся как живой собеседник, а не как безликий справочник: учитывай предыдущие сообщения, "
     "подстраивай тон под человека и отвечай естественным русским языком. Не повторяй вопрос и не "
-    "используй шаблонные заготовки вроде «Конечно, вот ответ», «Хорошо, объясняю» или «Как ИИ». "
-    "Не начинай каждый ответ одинаково, чередуй длину предложений и формулировки. Будь тёплым и "
-    "внимательным, но не переигрывай с эмоциями и не добавляй смайлики без повода. Отвечай по делу, "
-    "но не обрывай мысль; если запрос неоднозначный, задай один короткий уточняющий вопрос. "
-    "Используй списки и Markdown только когда они действительно улучшают читаемость. "
+    "используй шаблонные заготовки вроде «Конечно, вот ответ», «Хорошо, объясняю», «Рад помочь» "
+    "или «Как ИИ». Не начинай каждый ответ одинаково, чередуй длину предложений и формулировки. "
+    "Будь тёплым и внимательным, но не переигрывай с эмоциями и не добавляй смайлики без повода. "
+    "Отвечай прямо на просьбу: не ограничивайся общим согласием или пересказом запроса, добавляй "
+    "полезный ответ. Подбирай длину под сообщение: на короткий вопрос отвечай коротко, а сложную "
+    "тему объясняй с нужными деталями. Если запрос неоднозначный, задай один короткий уточняющий "
+    "вопрос. Используй списки и Markdown только когда они действительно улучшают читаемость. "
     "На короткое приветствие отвечай тоже коротко и естественно: на «Привет» достаточно «привет» "
     "или «привет!», без фраз «есть задача?» и без анкеты."
 )
@@ -922,6 +925,8 @@ def get_user_free_gens(user_id: int) -> int:
 
 def deduct_user_free_gens(user_id: int, amount: int) -> tuple[bool, int]:
     """Returns (success, new_balance)."""
+    if amount <= 0:
+        return True, get_user_free_gens(user_id)
     data = load_users()
     uid = str(user_id)
     if uid not in data:
@@ -930,6 +935,19 @@ def deduct_user_free_gens(user_id: int, amount: int) -> tuple[bool, int]:
     if current < amount:
         return False, current
     data[uid]["free_gens"] = current - amount
+    save_users(data)
+    return True, data[uid]["free_gens"]
+
+
+def refund_user_free_gens(user_id: int, amount: int) -> tuple[bool, int]:
+    """Return reserved image generations after a failed generation."""
+    if amount <= 0:
+        return True, get_user_free_gens(user_id)
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return False, 0
+    data[uid]["free_gens"] = data[uid].get("free_gens", 0) + amount
     save_users(data)
     return True, data[uid]["free_gens"]
 
@@ -1142,7 +1160,6 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
         [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="👤 Профиль")],
         [KeyboardButton(text="🔎 Найди в интернете")],
-        [KeyboardButton(text="ℹ️ Помощь")],
     ]
     if user_id == ADMIN_ID:
         buttons.append([KeyboardButton(text="🛡 Админ панель")])
@@ -2550,8 +2567,11 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     prompt = data.get("current_prompt", "")
 
-    # Check free_gens balance (admin and VIP bypass)
+    # Reserve free_gens before starting the long-running generation. This makes
+    # two quick clicks unable to start two jobs while paying for only one.
     price = get_img_gen_price()
+    generation_charged = False
+    generation_delivered = False
     if price > 0 and not is_admin(user_id) and not is_vip(user_id):
         gens = get_user_free_gens(user_id)
         if gens < price:
@@ -2562,12 +2582,22 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             return
 
     await callback.answer("🎨 Создаю...")
-    await callback.message.edit_text(
-        f"⏳ <b>Перевожу описание...</b>\n\n<i>{prompt}</i>",
-        parse_mode=ParseMode.HTML
-    )
+
+    if price > 0 and not is_admin(user_id) and not is_vip(user_id):
+        charged, remaining = deduct_user_free_gens(user_id, price)
+        if not charged:
+            await callback.message.answer(
+                f"❌ Недостаточно генераций! Нужно {price} 🎟, у тебя {remaining}.",
+            )
+            return
+        generation_charged = True
 
     try:
+        await callback.message.edit_text(
+            f"⏳ <b>Перевожу описание...</b>\n\n<i>{prompt}</i>",
+            parse_mode=ParseMode.HTML
+        )
+
         # Translate to English for better results
         english_prompt = await translate_prompt(prompt)
         logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
@@ -2673,16 +2703,13 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             else:
                 img_bytes = base64.b64decode(img_field)
 
-        # Deduct free_gens only on success (admin/VIP exempt)
-        if price > 0 and not is_admin(user_id) and not is_vip(user_id):
-            deduct_user_free_gens(user_id, price)
-
         photo = BufferedInputFile(img_bytes, filename="image.png")
         await callback.message.answer_photo(
             photo,
             caption=f"🎨 <i>{prompt}</i>",
             parse_mode=ParseMode.HTML,
         )
+        generation_delivered = True
 
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎨 Создать ещё", callback_data="img:generate", style="success")],
@@ -2696,6 +2723,19 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logger.error(f"Image gen error: {e}")
+        if generation_charged and not generation_delivered:
+            refunded, balance = refund_user_free_gens(user_id, price)
+            if refunded:
+                logger.info(
+                    "Image generation reservation refunded for user %s; balance=%s",
+                    user_id,
+                    balance,
+                )
+            else:
+                logger.error(
+                    "Could not refund image generation reservation for user %s",
+                    user_id,
+                )
         kb_err = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="img:generate", style="primary")],
             [InlineKeyboardButton(text="✏️ Новый промт", callback_data="img:prompt")],
