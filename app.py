@@ -9,9 +9,10 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 import aiohttp
-from urllib.parse import quote as url_quote
+from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 from io import BytesIO
 import base64
 from html.parser import HTMLParser
@@ -251,7 +252,9 @@ MODELS = {
 }
 
 SYSTEM_PROMPTS = {
-    "default": "Ты умный, дружелюбный и полезный ИИ-ассистент. Отвечай чётко, структурировано и по делу. Используй Markdown для форматирования когда уместно.",
+    "default": "Ты умный, дружелюбный и полезный ИИ-ассистент. Веди естественный диалог, "
+                "чувствуй контекст и отвечай как внимательный собеседник, а не как шаблонный бот. "
+                "Отвечай чётко, структурировано и по делу. Используй Markdown для форматирования когда уместно.",
     "coder": "Ты опытный программист и архитектор ПО. Помогаешь писать чистый, эффективный код с подробными объяснениями. Всегда используй блоки кода с указанием языка.",
     "writer": "Ты талантливый писатель и редактор. Помогаешь с текстами, статьями, историями и копирайтингом. Пишешь живо, грамотно и увлекательно.",
     "analyst": "Ты аналитик данных и бизнес-консультант. Помогаешь анализировать информацию, строить стратегии и принимать взвешенные решения.",
@@ -260,9 +263,13 @@ SYSTEM_PROMPTS = {
 }
 
 COMMON_INSTRUCTIONS = (
-    "Отвечай сразу по существу, без вступительных фраз и разъяснений о том, что ты сейчас будешь делать "
-    "(не пиши фразы вроде 'Конечно, вот ответ' или 'Хорошо, объясняю'). "
-    "Давай только сам ответ."
+    "Общайся как живой собеседник, а не как безликий справочник: учитывай предыдущие сообщения, "
+    "подстраивай тон под человека и отвечай естественным русским языком. Не повторяй вопрос и не "
+    "используй шаблонные заготовки вроде «Конечно, вот ответ», «Хорошо, объясняю» или «Как ИИ». "
+    "Не начинай каждый ответ одинаково, чередуй длину предложений и формулировки. Будь тёплым и "
+    "внимательным, но не переигрывай с эмоциями и не добавляй смайлики без повода. Отвечай по делу, "
+    "но не обрывай мысль; если запрос неоднозначный, задай один короткий уточняющий вопрос. "
+    "Используй списки и Markdown только когда они действительно улучшают читаемость."
 )
 
 ROLES = {
@@ -3006,11 +3013,82 @@ SEARCH_TRIGGER = "найди в интернете"
 SEARCH_MAX_RESULTS = 5
 SEARCH_MAX_QUERY_LENGTH = 300
 SEARCH_RESULT_CHARS = 900
+SEARCH_STOP_WORDS = {
+    "а", "без", "бы", "был", "быть", "в", "вам", "вас", "ведь", "во", "вот", "все",
+    "вы", "где", "да", "для", "до", "ее", "если", "есть", "же", "за", "и", "из",
+    "или", "как", "к", "когда", "кто", "ли", "мне", "мы", "на", "над", "не", "него",
+    "нет", "ни", "но", "о", "об", "он", "она", "они", "по", "под", "при", "про",
+    "с", "со", "так", "то", "у", "уже", "что", "чем", "это", "эти", "этот", "я",
+    "the", "and", "for", "from", "how", "what", "when", "where",
+}
 
 
 def _clean_search_text(value: str) -> str:
     value = re.sub(r"<[^>]+>", " ", value)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _decode_search_url(value: str) -> str:
+    """Turn Bing/DDG tracking links into the actual result URL."""
+    value = value.strip()
+    if value.startswith("//"):
+        value = f"https:{value}"
+
+    try:
+        query = parse_qs(urlparse(value).query)
+        for key in ("uddg", "u"):
+            target = query.get(key, [None])[0]
+            if not target:
+                continue
+            target = unquote(target)
+            if key == "u" and target.startswith("a1"):
+                encoded = target[2:]
+                encoded += "=" * (-len(encoded) % 4)
+                target = base64.urlsafe_b64decode(encoded).decode("utf-8", "ignore")
+            if target.startswith(("http://", "https://")):
+                return target
+    except Exception:
+        # Keep the original URL if a provider changes its tracking format.
+        pass
+    return value
+
+
+def _search_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-zа-яё0-9]{3,}", value.casefold())
+        if token not in SEARCH_STOP_WORDS
+    }
+
+
+def _is_relevant_search_result(query: str, result: dict[str, str]) -> bool:
+    """Reject valid-looking provider pages that are unrelated to the query."""
+    query_tokens = _search_tokens(query)
+    if not query_tokens:
+        return True
+    result_text = f"{result['title']} {result['snippet']} {result['url']}"
+    return bool(query_tokens & _search_tokens(result_text))
+
+
+def _parse_bing_rss(page: str) -> list[dict[str, str]]:
+    """Parse Bing's small RSS fallback, which survives HTML markup changes."""
+    try:
+        root = ET.fromstring(page)
+    except ET.ParseError:
+        return []
+
+    results = []
+    for item in root.findall(".//item"):
+        title = _clean_search_text(item.findtext("title") or "")
+        url = _decode_search_url(item.findtext("link") or "")
+        snippet = _clean_search_text(item.findtext("description") or "")
+        if title and url.startswith(("http://", "https://")):
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": snippet[:SEARCH_RESULT_CHARS],
+            })
+    return results
 
 
 class SearchResultsParser(HTMLParser):
@@ -3080,7 +3158,7 @@ class SearchResultsParser(HTMLParser):
     def _finish_current(self):
         if self.current:
             title = _clean_search_text(self.current["title"])
-            url = self.current["url"].strip()
+            url = _decode_search_url(self.current["url"])
             snippet = _clean_search_text(self.current["snippet"])
             if title and url.startswith(("http://", "https://")):
                 self.results.append({
@@ -3099,7 +3177,10 @@ async def search_web(query: str) -> list[dict[str, str]]:
     """Fetch current web results without requiring another API key."""
     encoded_query = url_quote(query, safe="")
     search_urls = (
-        f"https://www.bing.com/search?q={encoded_query}&count={SEARCH_MAX_RESULTS}&setlang=ru",
+        # Explicit Russian market parameters avoid unrelated regional results.
+        f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru&mkt=ru-RU&form=QBLH",
+        f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru",
+        f"https://www.bing.com/search?format=rss&q={encoded_query}",
         f"https://html.duckduckgo.com/html/?q={encoded_query}&kl=ru-ru",
     )
     headers = {
@@ -3124,9 +3205,16 @@ async def search_web(query: str) -> list[dict[str, str]]:
                         continue
                     page = await response.text(errors="ignore")
 
-                parser = SearchResultsParser()
-                parser.feed(page)
-                results = parser.results[:SEARCH_MAX_RESULTS]
+                if "<rss" in page[:500].lower():
+                    results = _parse_bing_rss(page)
+                else:
+                    parser = SearchResultsParser()
+                    parser.feed(page)
+                    results = parser.results
+                results = [
+                    item for item in results
+                    if _is_relevant_search_result(query, item)
+                ][:SEARCH_MAX_RESULTS]
                 if results:
                     logger.info("Web search returned %s results", len(results))
                     return results
