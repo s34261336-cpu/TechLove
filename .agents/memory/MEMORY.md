@@ -3,3 +3,4 @@
 - [Python runtime setup](python-runtime-setup.md) — use a full Python tools module when the base interpreter rejects dependency installation.
 - [Imported Python runtime](python-runtime-import.md) — check for a managed Python runtime before installing dependencies for imported applications.
 - [Web search provider](web-search-provider.md) — prefer Bing HTML results with DuckDuckGo as fallback; DDG can return HTTP 200 with no parsed results here.
+- [Groq model lifecycle](groq-model-lifecycle.md) — retired Llama model IDs can fail even when the API key works; keep current Groq IDs and a fallback.

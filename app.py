@@ -105,17 +105,17 @@ MODELS = {
         "emoji_id": "5323761960829862762",
     },
     "llama3_70b": {
-        "name": "Llama 3.3 70B",
-        "model_id": "llama-3.3-70b-versatile",
-        "description": "Мощная универсальная модель. Отлично справляется с любыми задачами.",
+        "name": "GPT-OSS 120B",
+        "model_id": "openai/gpt-oss-120b",
+        "description": "Мощная актуальная модель Groq. Хорошо справляется со сложными задачами.",
         "emoji": "🧠",
         "emoji_html": pe("5805553606635559688", "🧠"),
         "emoji_id": "5805553606635559688",
     },
     "llama3_8b": {
-        "name": "Llama 3.1 8B",
-        "model_id": "llama-3.1-8b-instant",
-        "description": "Молниеносная лёгкая модель. Идеальна для быстрых ответов.",
+        "name": "GPT-OSS 20B",
+        "model_id": "openai/gpt-oss-20b",
+        "description": "Быстрая актуальная модель Groq для повседневных запросов.",
         "emoji": "⚡",
         "emoji_html": pe("5323761960829862762", "⚡️"),
         "emoji_id": "5323761960829862762",
@@ -269,8 +269,28 @@ COMMON_INSTRUCTIONS = (
     "Не начинай каждый ответ одинаково, чередуй длину предложений и формулировки. Будь тёплым и "
     "внимательным, но не переигрывай с эмоциями и не добавляй смайлики без повода. Отвечай по делу, "
     "но не обрывай мысль; если запрос неоднозначный, задай один короткий уточняющий вопрос. "
-    "Используй списки и Markdown только когда они действительно улучшают читаемость."
+    "Используй списки и Markdown только когда они действительно улучшают читаемость. "
+    "На короткое приветствие отвечай тоже коротко и естественно: на «Привет» достаточно «привет» "
+    "или «привет!», без фраз «есть задача?» и без анкеты."
 )
+
+
+SIMPLE_GREETINGS = {
+    "привет": "привет",
+    "здравствуй": "здравствуй",
+    "здравствуйте": "здравствуйте",
+    "хай": "хай",
+    "хелло": "хелло",
+    "доброе утро": "доброе утро",
+    "добрый день": "добрый день",
+    "добрый вечер": "добрый вечер",
+}
+
+
+def get_simple_greeting(text: str) -> str | None:
+    normalized = " ".join(re.findall(r"[a-zа-яё]+", text.casefold()))
+    return SIMPLE_GREETINGS.get(normalized)
+
 
 ROLES = {
     "default":    {"name": "Ассистент",    "emoji": "🤖",  "emoji_html": pe("5258093637450866522", "🤖"),  "emoji_id": "5258093637450866522"},
@@ -1100,7 +1120,7 @@ class AntiSpamMiddleware(BaseMiddleware):
 def get_session(user_id: int) -> dict:
     if user_id not in user_sessions:
         user_sessions[user_id] = {
-            "model": "llama3_70b",
+            "model": "gpt_oss_120b",
             "role": "default",
             "style": "calm",
             "history": [],
@@ -2499,7 +2519,7 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
 async def translate_prompt(prompt: str) -> str:
     """Translate prompt to English using Groq for better image generation results."""
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "openai/gpt-oss-20b",
         "messages": [
             {
                 "role": "system",
@@ -3228,19 +3248,20 @@ async def search_web(query: str) -> list[dict[str, str]]:
 
 async def summarize_search_results(query: str, results: list[dict[str, str]]) -> str:
     """Summarize search snippets with the existing Groq key and model."""
+    search_summary_models = ("openai/gpt-oss-20b", "openai/gpt-oss-120b")
     sources = "\n\n".join(
         f"[{index}] {item['title']}\n{item['snippet'] or 'Описание отсутствует.'}\n"
         f"Источник: {item['url']}"
         for index, item in enumerate(results, start=1)
     )
-    payload = {
-        "model": "llama-3.1-8b-instant",
+    request_payload = {
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "Ты редактор кратких ответов на русском языке. "
-                    "Отвечай только по данным из источников. "
+                    "Ты живой и понятный редактор кратких ответов на русском языке. "
+                    "Отвечай только по данным из источников, но пиши естественно, "
+                    "будто коротко объясняешь результат человеку. "
                     "Сделай сжатый ответ до 900 символов: 2–4 коротких абзаца "
                     "или маркированных пункта. Не добавляй ссылки, номера источников, "
                     "служебные пометки и непонятные обозначения. Если данных "
@@ -3252,7 +3273,7 @@ async def summarize_search_results(query: str, results: list[dict[str, str]]) ->
                 "content": f"Запрос: {query}\n\nРезультаты поиска:\n{sources}",
             },
         ],
-        "temperature": 0.2,
+        "temperature": 0.35,
         "max_tokens": 500,
     }
     headers = {
@@ -3260,22 +3281,34 @@ async def summarize_search_results(query: str, results: list[dict[str, str]]) ->
         "Content-Type": "application/json",
     }
 
+    summary = ""
+    last_error = "Groq не вернул ответ"
     async with aiohttp.ClientSession() as http:
-        async with http.post(
-            GROQ_API_URL,
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=25),
-        ) as response:
-            data = await response.json()
+        for model_id in search_summary_models:
+            payload = {**request_payload, "model": model_id}
+            try:
+                async with http.post(
+                    GROQ_API_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=25),
+                ) as response:
+                    data = await response.json(content_type=None)
+            except Exception as error:
+                last_error = str(error)
+                logger.warning("Search summary model %s failed: %s", model_id, error)
+                continue
 
-    if "choices" not in data:
-        error = data.get("error", {}).get("message", "Groq не вернул ответ")
-        raise ValueError(error)
+            if "choices" in data:
+                summary = data["choices"][0]["message"].get("content", "").strip()
+                if summary:
+                    break
 
-    summary = data["choices"][0]["message"].get("content", "").strip()
+            last_error = data.get("error", {}).get("message", "Groq не вернул ответ")
+            logger.warning("Search summary model %s failed: %s", model_id, last_error)
+
     if not summary:
-        raise ValueError("Не удалось подготовить краткий ответ.")
+        raise ValueError(last_error)
 
     # Remove citation artifacts or URLs if the model included them despite the prompt.
     summary = re.sub(r"\[\d+\]", "", summary)
@@ -3503,6 +3536,11 @@ async def process_text_message(message: Message, text: str):
 
     # Track user activity
     touch_user(user_id, message.from_user.first_name, message.from_user.username or "")
+
+    simple_greeting = get_simple_greeting(text)
+    if simple_greeting:
+        await message.answer(simple_greeting)
+        return
 
     session = get_session(user_id)
     model = MODELS[session["model"]]
