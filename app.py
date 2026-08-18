@@ -104,22 +104,6 @@ MODELS = {
         "emoji_html": pe("5323761960829862762", "⚡️"),
         "emoji_id": "5323761960829862762",
     },
-    "llama3_70b": {
-        "name": "GPT-OSS 120B",
-        "model_id": "openai/gpt-oss-120b",
-        "description": "Мощная актуальная модель Groq. Хорошо справляется со сложными задачами.",
-        "emoji": "🧠",
-        "emoji_html": pe("5805553606635559688", "🧠"),
-        "emoji_id": "5805553606635559688",
-    },
-    "llama3_8b": {
-        "name": "GPT-OSS 20B",
-        "model_id": "openai/gpt-oss-20b",
-        "description": "Быстрая актуальная модель Groq для повседневных запросов.",
-        "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
-        "emoji_id": "5323761960829862762",
-    },
     "qwen3_27b": {
         "name": "Qwen3.6 27B",
         "model_id": "qwen/qwen3.6-27b",
@@ -130,7 +114,7 @@ MODELS = {
     },
     "compound": {
         "name": "Groq Compound",
-        "model_id": "compound-beta",
+        "model_id": "groq/compound",
         "description": "Составная модель от Groq. Объединяет несколько ИИ для лучшего результата.",
         "emoji": "⚗️",
         "emoji_html": pe("5913787972200698358", "⚗️"),
@@ -138,11 +122,19 @@ MODELS = {
     },
     "qwen3_32b": {
         "name": "Groq Compound Mini",
-        "model_id": "compound-beta-mini",
+        "model_id": "groq/compound-mini",
         "description": "Компактная составная модель Groq. Быстрая и умная — лучший баланс скорости и качества.",
         "emoji": "🌀",
         "emoji_html": pe("5388957777676745182", "🌀"),
         "emoji_id": "5388957777676745182",
+    },
+    "gpt_oss_safeguard": {
+        "name": "GPT-OSS Safeguard 20B",
+        "model_id": "openai/gpt-oss-safeguard-20b",
+        "description": "Актуальная защитная модель Groq для безопасных и аккуратных ответов.",
+        "emoji": "🛡️",
+        "emoji_html": pe("5314536790874230525", "🛡️"),
+        "emoji_id": "5314536790874230525",
     },
     "sn_deepseek_v3_1": {
         "name": "DeepSeek V3.1",
@@ -186,6 +178,24 @@ MODELS = {
         "emoji_id": "5926783847453692661",
         "provider": "sambanova",
     },
+    "sn_minimax_m27": {
+        "name": "MiniMax M2.7",
+        "model_id": "MiniMax-M2.7",
+        "description": "Новая производственная модель MiniMax на SambaNova. Большой контекст и сильная логика.",
+        "emoji": "🚀",
+        "emoji_html": pe("5314536790874230525", "🚀"),
+        "emoji_id": "5314536790874230525",
+        "provider": "sambanova",
+    },
+    "sn_llama_33_70b": {
+        "name": "Llama 3.3 70B",
+        "model_id": "Meta-Llama-3.3-70B-Instruct",
+        "description": "Надёжная производственная модель Meta на SambaNova.",
+        "emoji": "🦙",
+        "emoji_html": pe("5926783847453692661", "🦙"),
+        "emoji_id": "5926783847453692661",
+        "provider": "sambanova",
+    },
     "or_nemotron_550b": {
         "name": "Nemotron Ultra 550B",
         "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -223,12 +233,30 @@ MODELS = {
         "provider": "openrouter",
     },
     "or_ling_flash": {
-        "name": "Ling 3.0 Flash",
-        "model_id": "inclusionai/ling-3.0-flash:free",
-        "description": "Ling 3.0 Flash — быстрая и умная модель от InclusionAI.",
+        "name": "Nemotron 3.5 Lightning",
+        "model_id": "nvidia/nemotron-3.5-lightning:free",
+        "description": "Новая быстрая бесплатная модель NVIDIA для повседневных задач.",
         "emoji": "🔮",
         "emoji_html": pe("5258093637450866522", "🔮"),
         "emoji_id": "5258093637450866522",
+        "provider": "openrouter",
+    },
+    "or_gemma4_31b": {
+        "name": "Gemma 4 31B",
+        "model_id": "google/gemma-4-31b-it:free",
+        "description": "Мультимодальная модель Google с поддержкой изображений.",
+        "emoji": "💎",
+        "emoji_html": pe("5258093637450866522", "💎"),
+        "emoji_id": "5258093637450866522",
+        "provider": "openrouter",
+    },
+    "or_nemotron_omni": {
+        "name": "Nemotron Nano Omni",
+        "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "description": "Новая бесплатная reasoning-модель NVIDIA для сложных задач.",
+        "emoji": "🧩",
+        "emoji_html": pe("5388957777676745182", "🧩"),
+        "emoji_id": "5388957777676745182",
         "provider": "openrouter",
     },
     "or_gpt_oss_20b": {
@@ -1169,24 +1197,38 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
 MODEL_STYLES = {
     "gpt_oss_120b": "danger",
     "gpt_oss_20b": "primary",
-    "llama3_70b": "success",
-    "llama3_8b": "primary",
     "qwen3_27b": "primary",
     "compound": "danger",
     "qwen3_32b": "success",
+    "gpt_oss_safeguard": "success",
     "sn_deepseek_v3_1": "danger",
     "sn_deepseek_v3_2": "danger",
 
     "sn_gemma4_31b": "success",
     "sn_gpt_oss_120b": "danger",
+    "sn_minimax_m27": "danger",
+    "sn_llama_33_70b": "success",
     "or_nemotron_550b": "danger",
     "or_nemotron_120b": "success",
     "or_nemotron_30b": "primary",
     "or_gemma4_26b": "success",
+    "or_gemma4_31b": "success",
     "or_ling_flash": "primary",
     "or_gpt_oss_20b": "primary",
     "or_nemotron_9b": "primary",
+    "or_nemotron_omni": "danger",
 }
+
+
+def is_model_available(model: dict) -> bool:
+    """Only show models whose provider credentials are configured."""
+    provider = model.get("provider", "groq")
+    if provider == "sambanova":
+        return bool(SAMBANOVA_API_KEY)
+    if provider == "openrouter":
+        return bool(OPENROUTER_API_KEY)
+    return True
+
 
 def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMarkup:
     # ── Filter row at the top ──────────────────────────────────────────────────
@@ -1215,6 +1257,8 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         group_btns: list[InlineKeyboardButton] = []
         for key, model in MODELS.items():
             if model.get("provider", "groq") != provider_key:
+                continue
+            if not is_model_available(model):
                 continue
             price = get_model_price(key)
             is_paid = price > 0
@@ -2375,6 +2419,13 @@ async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
     model = MODELS[model_key]
 
+    if not is_model_available(model):
+        await callback.answer(
+            "Эта модель временно скрыта: для её провайдера не настроен API-ключ.",
+            show_alert=True,
+        )
+        return
+
     # Check if model is restricted (admin can always select any model, unless in test mode)
     if not is_admin(callback.from_user.id):
         r = get_model_restriction(model_key)
@@ -2618,18 +2669,14 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     try:
         await callback.message.edit_text(
-            f"⏳ <b>Перевожу описание...</b>\n\n<i>{prompt}</i>",
+            f"⏳ <b>Готовлю изображение по вашему описанию...</b>\n\n<i>{prompt}</i>",
             parse_mode=ParseMode.HTML
         )
 
-        # Translate to English for better results, but do not block generation
-        # when the optional translation request is temporarily unavailable.
-        try:
-            english_prompt = await translate_prompt(prompt)
-        except Exception as translation_error:
-            logger.warning(f"Image prompt translation failed: {translation_error}")
-            english_prompt = prompt
-        logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
+        # Send the user's prompt unchanged. Rewriting it through another model
+        # can silently replace important subjects, details, and style choices.
+        image_prompt = prompt
+        logger.info(f"Img prompt used unchanged: '{image_prompt}'")
 
         await callback.message.edit_text(
             f"🎨 <b>Отправляю в очередь...</b>\n\n<i>{prompt}</i>",
@@ -2639,7 +2686,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         # Pollinations is fast and does not require a provider key. Keep
         # Stable Horde as a fallback because public services can rate-limit.
         try:
-            img_bytes = await generate_pollinations_image(english_prompt)
+            img_bytes = await generate_pollinations_image(image_prompt)
             logger.info("Image generated through Pollinations")
         except Exception as pollinations_error:
             logger.warning(f"Pollinations image generation failed: {pollinations_error}")
@@ -2651,7 +2698,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 "Client-Agent": "ZenoAI:1.0:telegram-bot",
             }
             horde_payload = {
-                "prompt": english_prompt,
+                "prompt": image_prompt,
                 "params": {
                     "width": 512,
                     "height": 512,
