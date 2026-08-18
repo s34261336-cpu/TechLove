@@ -6,3 +6,7 @@ aiogram==3.30.0
 aiohttp
 faster-whisper
 groq
+aiogram==3.30.0
+aiohttp
+faster-whisper
+groq
