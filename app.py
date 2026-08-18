@@ -2561,6 +2561,30 @@ async def translate_prompt(prompt: str) -> str:
             return data["choices"][0]["message"]["content"].strip()
 
 
+async def generate_pollinations_image(prompt: str) -> bytes:
+    """Generate an image through Pollinations' public image endpoint."""
+    encoded_prompt = url_quote(prompt, safe="")
+    image_url = (
+        f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+        "?width=512&height=512&nologo=true"
+    )
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            image_url,
+            headers={"User-Agent": "ZenoAI:1.0:telegram-bot"},
+            timeout=aiohttp.ClientTimeout(total=90),
+        ) as response:
+            if response.status != 200:
+                body = await response.text()
+                raise ValueError(
+                    f"Pollinations HTTP {response.status}: {body[:200]}"
+                )
+            image_bytes = await response.read()
+            if not image_bytes:
+                raise ValueError("Pollinations: пустое изображение")
+            return image_bytes
+
+
 @router.callback_query(ImgStates.has_prompt, F.data == "img:generate")
 async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -2598,8 +2622,13 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             parse_mode=ParseMode.HTML
         )
 
-        # Translate to English for better results
-        english_prompt = await translate_prompt(prompt)
+        # Translate to English for better results, but do not block generation
+        # when the optional translation request is temporarily unavailable.
+        try:
+            english_prompt = await translate_prompt(prompt)
+        except Exception as translation_error:
+            logger.warning(f"Image prompt translation failed: {translation_error}")
+            english_prompt = prompt
         logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
 
         await callback.message.edit_text(
@@ -2607,101 +2636,105 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             parse_mode=ParseMode.HTML
         )
 
-        # ── Stable Horde (free community GPU) ─────────────────────────────────
-        HORDE_URL = "https://stablehorde.net/api/v2"
-        horde_headers = {
-            "apikey": "0000000000",  # anonymous free key
-            "Content-Type": "application/json",
-            "Client-Agent": "ZenoAI:1.0:telegram-bot",
-        }
-        horde_payload = {
-            "prompt": english_prompt,
-            "params": {
-                "width": 512,
-                "height": 512,
-                "steps": 20,
-                "n": 1,
-                "sampler_name": "k_euler_a",
-                "cfg_scale": 7.5,
-            },
-            "nsfw": False,
-            "shared": True,
-            "trusted_workers": False,
-            "slow_workers": True,
-        }
+        # Pollinations is fast and does not require a provider key. Keep
+        # Stable Horde as a fallback because public services can rate-limit.
+        try:
+            img_bytes = await generate_pollinations_image(english_prompt)
+            logger.info("Image generated through Pollinations")
+        except Exception as pollinations_error:
+            logger.warning(f"Pollinations image generation failed: {pollinations_error}")
 
-        async with aiohttp.ClientSession() as http:
-            # Submit job
-            async with http.post(
-                f"{HORDE_URL}/generate/async",
-                json=horde_payload,
-                headers=horde_headers,
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as resp:
-                if resp.status != 202:
-                    body = await resp.text()
-                    raise ValueError(f"Horde submit HTTP {resp.status}: {body[:200]}")
-                submit_data = await resp.json()
-                job_id = submit_data["id"]
-                logger.info(f"Horde job submitted: {job_id}")
+            HORDE_URL = "https://stablehorde.net/api/v2"
+            horde_headers = {
+                "apikey": "0000000000",
+                "Content-Type": "application/json",
+                "Client-Agent": "ZenoAI:1.0:telegram-bot",
+            }
+            horde_payload = {
+                "prompt": english_prompt,
+                "params": {
+                    "width": 512,
+                    "height": 512,
+                    "steps": 20,
+                    "n": 1,
+                    "sampler_name": "k_euler_a",
+                    "cfg_scale": 7.5,
+                },
+                "nsfw": False,
+                "shared": True,
+                "trusted_workers": False,
+                "slow_workers": True,
+            }
 
-            # Poll for completion (max 4 min)
-            img_bytes = None
-            for tick in range(48):
-                await asyncio.sleep(5)
-                async with http.get(
-                    f"{HORDE_URL}/generate/check/{job_id}",
+            async with aiohttp.ClientSession() as http:
+                async with http.post(
+                    f"{HORDE_URL}/generate/async",
+                    json=horde_payload,
                     headers=horde_headers,
-                    timeout=aiohttp.ClientTimeout(total=10),
+                    timeout=aiohttp.ClientTimeout(total=20),
                 ) as resp:
-                    check = await resp.json()
+                    if resp.status != 202:
+                        body = await resp.text()
+                        raise ValueError(f"Horde submit HTTP {resp.status}: {body[:200]}")
+                    submit_data = await resp.json()
+                    job_id = submit_data["id"]
+                    logger.info(f"Horde job submitted: {job_id}")
 
-                if check.get("faulted"):
-                    raise ValueError("Horde: генерация не удалась")
-                if check.get("done"):
-                    break
+                for tick in range(48):
+                    await asyncio.sleep(5)
+                    async with http.get(
+                        f"{HORDE_URL}/generate/check/{job_id}",
+                        headers=horde_headers,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        check = await resp.json()
 
-                wait_time = check.get("wait_time", "?")
-                queue_pos = check.get("queue_position", "?")
-                try:
-                    await callback.message.edit_text(
-                        f"🎨 <b>Рисую...</b>\n\n"
-                        f"<i>{prompt}</i>\n\n"
-                        f"⏱ ~{wait_time}с · позиция в очереди: {queue_pos}",
-                        parse_mode=ParseMode.HTML,
-                    )
-                except TelegramBadRequest:
-                    pass
-            else:
-                raise ValueError("Horde: таймаут (4 минуты)")
+                    if check.get("faulted"):
+                        raise ValueError("Horde: генерация не удалась")
+                    if check.get("done"):
+                        break
 
-            # Fetch result
-            async with http.get(
-                f"{HORDE_URL}/generate/status/{job_id}",
-                headers=horde_headers,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                result = await resp.json()
+                    wait_time = check.get("wait_time", "?")
+                    queue_pos = check.get("queue_position", "?")
+                    try:
+                        await callback.message.edit_text(
+                            f"🎨 <b>Рисую...</b>\n\n"
+                            f"<i>{prompt}</i>\n\n"
+                            f"⏱ ~{wait_time}с · позиция в очереди: {queue_pos}",
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except TelegramBadRequest:
+                        pass
+                else:
+                    raise ValueError("Horde: таймаут (4 минуты)")
 
-            generations = result.get("generations", [])
-            if not generations:
-                raise ValueError("Horde: нет результата")
-            gen = generations[0]
-            img_field = gen.get("img", "")
-            if not img_field:
-                raise ValueError("Horde: пустое изображение")
-
-            # Horde may return a URL (r2=True) or raw base64
-            if gen.get("r2") or img_field.startswith("http"):
                 async with http.get(
-                    img_field,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as img_resp:
-                    if img_resp.status != 200:
-                        raise ValueError(f"Horde: не удалось скачать изображение ({img_resp.status})")
-                    img_bytes = await img_resp.read()
-            else:
-                img_bytes = base64.b64decode(img_field)
+                    f"{HORDE_URL}/generate/status/{job_id}",
+                    headers=horde_headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    result = await resp.json()
+
+                generations = result.get("generations", [])
+                if not generations:
+                    raise ValueError("Horde: нет результата")
+                gen = generations[0]
+                img_field = gen.get("img", "")
+                if not img_field:
+                    raise ValueError("Horde: пустое изображение")
+
+                if gen.get("r2") or img_field.startswith("http"):
+                    async with http.get(
+                        img_field,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as img_resp:
+                        if img_resp.status != 200:
+                            raise ValueError(
+                                f"Horde: не удалось скачать изображение ({img_resp.status})"
+                            )
+                        img_bytes = await img_resp.read()
+                else:
+                    img_bytes = base64.b64decode(img_field)
 
         photo = BufferedInputFile(img_bytes, filename="image.png")
         await callback.message.answer_photo(
@@ -3584,7 +3617,6 @@ async def process_text_message(message: Message, text: str):
 
     session = get_session(user_id)
     model = MODELS[session["model"]]
-    role = ROLES[session["role"]]
 
     # Block if current model is restricted (admin is exempt, unless in test mode)
     if not is_admin(message.from_user.id):
@@ -3652,9 +3684,10 @@ async def process_text_message(message: Message, text: str):
     try:
         reply = await call_ai(session, text)
 
-        header = f"<i>{role['emoji_html']} {role['name']} · {model['name']}</i>"
-
-        await thinking_msg.edit_text(header, parse_mode=ParseMode.HTML)
+        try:
+            await thinking_msg.delete()
+        except TelegramBadRequest:
+            pass
 
         chunks = [reply[i:i + 4096] for i in range(0, len(reply), 4096)]
         for chunk in chunks:
