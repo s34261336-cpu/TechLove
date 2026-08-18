@@ -1449,7 +1449,7 @@ async def cmd_start(message: Message):
         f"• Стиль: {style['emoji']} {style['name']}\n\n"
         f"✍️ Просто напиши сообщение — и я отвечу!"
     )
-    photo = FSInputFile("welcome_photo.jpg")
+    photo = FSInputFile("attached_assets/IMG_20260810_101608_213_1787023992393.jpg")
     await message.answer_photo(
         photo,
         caption=caption,
