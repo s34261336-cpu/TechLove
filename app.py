@@ -1183,14 +1183,17 @@ def get_session(user_id: int) -> dict:
 # ─── Keyboards ───────────────────────────────────────────────────────────────
 
 def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
+    def button(text: str, style: str) -> KeyboardButton:
+        return KeyboardButton(text=text, style=style)
+
     buttons = [
-        [KeyboardButton(text="🤖 Модель"), KeyboardButton(text="🎭 Роль")],
-        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
-        [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="👤 Профиль")],
-        [KeyboardButton(text="🔎 Найди в интернете")],
+        [button("🤖 Модель", "primary"), button("🎭 Роль", "success")],
+        [button("⚙️ Настройки", "primary"), button("🗑 Новый диалог", "danger")],
+        [button("🎨 Нейро-фото", "success"), button("👤 Профиль", "primary")],
+        [button("🔎 Найди в интернете", "primary")],
     ]
     if user_id == ADMIN_ID:
-        buttons.append([KeyboardButton(text="🛡 Админ панель")])
+        buttons.append([button("🛡 Админ панель", "danger")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
