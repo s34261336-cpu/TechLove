@@ -4,6 +4,7 @@ import asyncio
 import logging
 import json
 import tempfile
+import shutil
 import threading
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -1242,7 +1243,7 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
     buttons = [
         [button("🤖 Модель", "primary"), button("🎭 Роль", "success")],
         [button("⚙️ Настройки", "primary"), button("🗑 Новый диалог", "danger")],
-        [button("🎨 Нейро-фото", "success"), button("👤 Профиль", "primary")],
+        [button("✨ Генерация", "success"), button("👤 Профиль", "primary")],
         [button("🔎 Найди в интернете", "primary")],
     ]
     if user_id == ADMIN_ID:
@@ -2578,17 +2579,46 @@ IMG_WELCOME_TEXT = (
 
 @router.message(Command("img"))
 @router.message(F.text == "🎨 Нейро-фото")
+@router.message(F.text == "✨ Генерация")
 async def cmd_img(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Ввести описание", callback_data="img:prompt")]
+        [InlineKeyboardButton(text="🖼 Фото", callback_data="img:mode:photo", style="primary"),
+         InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
     ])
-    text = IMG_WELCOME_TEXT + img_gen_info_text(message.from_user.id)
+    text = (
+        "✨ <b>Генерация по описанию</b>\n\n"
+        "Выберите, что создать:\n"
+        "🖼 <b>Фото</b> — изображение по вашему описанию.\n"
+        "🎬 <b>Видео</b> — бесплатный короткий клип с плавной анимацией.\n\n"
+        f"🖼 Фото: {('🆓 Бесплатно' if get_img_gen_price() == 0 else f'{get_img_gen_price()} 🎟 за генерацию')}\n"
+        "🎬 Видео: 🆓 <b>Бесплатно</b>"
+        + img_gen_info_text(message.from_user.id)
+    )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("img:mode:"))
+async def cb_img_mode(callback: CallbackQuery, state: FSMContext):
+    media_type = callback.data.split(":")[-1]
+    await state.update_data(media_type=media_type, img_msg_id=callback.message.message_id)
+    await state.set_state(ImgStates.waiting_prompt)
+    title = "фото" if media_type == "photo" else "видео"
+    await callback.message.edit_text(
+        f"✏️ <b>Опишите {title}</b>\n\n"
+        "Чем подробнее описание — тем лучше результат.\n\n"
+        "<i>Пример: закат над горами, лёгкое движение облаков, яркие цвета</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="img:cancel", style="danger")]
+        ])
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "img:prompt")
 async def cb_img_prompt(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(media_type="photo")
     await state.set_state(ImgStates.waiting_prompt)
     await state.update_data(img_msg_id=callback.message.message_id)
     await callback.message.edit_text(
@@ -2616,7 +2646,10 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
         pass
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Создать картинку", callback_data="img:generate", style="success")],
+        [InlineKeyboardButton(
+            text=("🎬 Создать видео" if data.get("media_type") == "video" else "🖼 Создать фото"),
+            callback_data="img:generate", style="success"
+        )],
         [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
     ])
     text = (
@@ -2692,15 +2725,44 @@ async def generate_pollinations_image(prompt: str) -> bytes:
             return image_bytes
 
 
+async def render_free_video(image_bytes: bytes) -> bytes:
+    """Turn a generated image into a short animated MP4 without paid APIs."""
+    temp_dir = tempfile.mkdtemp(prefix="zeno-video-")
+    image_path = os.path.join(temp_dir, "source.png")
+    video_path = os.path.join(temp_dir, "result.mp4")
+    try:
+        with open(image_path, "wb") as image_file:
+            image_file.write(image_bytes)
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-loop", "1", "-i", image_path,
+            "-vf",
+            "scale=720:720:force_original_aspect_ratio=decrease,"
+            "pad=720:720:(ow-iw)/2:(oh-ih)/2,"
+            "zoompan=z='min(zoom+0.0015,1.08)':d=150:s=720x720:fps=25,"
+            "format=yuv420p",
+            "-t", "6", "-an", "-movflags", "+faststart", video_path,
+        )
+        return_code = await process.wait()
+        if return_code != 0 or not os.path.exists(video_path):
+            raise ValueError("Не удалось собрать видео")
+        with open(video_path, "rb") as video_file:
+            return video_file.read()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 @router.callback_query(ImgStates.has_prompt, F.data == "img:generate")
 async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     data = await state.get_data()
     prompt = data.get("current_prompt", "")
+    media_type = data.get("media_type", "photo")
+    is_video = media_type == "video"
 
     # Reserve free_gens before starting the long-running generation. This makes
     # two quick clicks unable to start two jobs while paying for only one.
-    price = get_img_gen_price()
+    price = 0 if is_video else get_img_gen_price()
     generation_charged = False
     generation_delivered = False
     if price > 0 and not is_admin(user_id) and not is_vip(user_id):
@@ -2725,7 +2787,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     try:
         await callback.message.edit_text(
-            f"⏳ <b>Готовлю изображение по вашему описанию...</b>\n\n<i>{prompt}</i>",
+            f"⏳ <b>Готовлю {'видео' if is_video else 'фото'} по вашему описанию...</b>\n\n<i>{prompt}</i>",
             parse_mode=ParseMode.HTML
         )
 
@@ -2735,7 +2797,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Img prompt used unchanged: '{image_prompt}'")
 
         await callback.message.edit_text(
-            f"🎨 <b>Отправляю в очередь...</b>\n\n<i>{prompt}</i>",
+            f"{'🎬' if is_video else '🎨'} <b>Готовлю медиа...</b>\n\n<i>{prompt}</i>",
             parse_mode=ParseMode.HTML
         )
 
@@ -2839,20 +2901,37 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 else:
                     img_bytes = base64.b64decode(img_field)
 
-        photo = BufferedInputFile(img_bytes, filename="image.png")
-        await callback.message.answer_photo(
-            photo,
-            caption=f"🎨 <i>{prompt}</i>",
-            parse_mode=ParseMode.HTML,
-        )
+        if is_video:
+            await callback.message.edit_text(
+                f"🎬 <b>Анимирую видео...</b>\n\n<i>{prompt}</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            video_bytes = await render_free_video(img_bytes)
+            await callback.message.answer_video(
+                BufferedInputFile(video_bytes, filename="video.mp4"),
+                caption=f"🎬 <i>{prompt}</i>\n\n🆓 Бесплатная генерация",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            photo = BufferedInputFile(img_bytes, filename="image.png")
+            await callback.message.answer_photo(
+                photo,
+                caption=f"🎨 <i>{prompt}</i>",
+                parse_mode=ParseMode.HTML,
+            )
         generation_delivered = True
 
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎨 Создать ещё", callback_data="img:generate", style="success")],
+            [InlineKeyboardButton(
+                text=("🎬 Создать ещё видео" if is_video else "🖼 Создать ещё фото"),
+                callback_data="img:generate", style="success"
+            )],
+            [InlineKeyboardButton(text="🔁 Выбрать фото/видео", callback_data="img:home")],
             [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt", style="primary")],
         ])
         await callback.message.edit_text(
-            f"{IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n<b>Последний промт:</b>\n<i>{prompt}</i>",
+            f"{'🎬 Видео готово' if is_video else IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n"
+            f"<b>Последний промт:</b>\n<i>{prompt}</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_menu
         )
@@ -2877,7 +2956,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="✏️ Новый промт", callback_data="img:prompt")],
         ])
         await callback.message.edit_text(
-            "❌ <b>Не удалось создать картинку.</b>\n\n"
+            f"❌ <b>Не удалось создать {'видео' if is_video else 'фото'}.</b>\n\n"
             "Сервис генерации временно недоступен. Попробуйте позже или измените описание.",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_err
@@ -2892,6 +2971,22 @@ async def cb_img_cancel(callback: CallbackQuery, state: FSMContext):
     ])
     await callback.message.edit_text(IMG_WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb)
     await callback.answer("Отменено")
+
+
+@router.callback_query(F.data == "img:home")
+async def cb_img_home(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(
+        "✨ <b>Генерация по описанию</b>\n\n"
+        "🖼 Фото — по текущей цене генерации.\n"
+        "🎬 Видео — бесплатно.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🖼 Фото", callback_data="img:mode:photo", style="primary"),
+             InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
+        ]),
+    )
+    await callback.answer()
 
 
 # ─── Groq API ─────────────────────────────────────────────────────────────────
