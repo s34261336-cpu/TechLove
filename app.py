@@ -2739,7 +2739,11 @@ async def render_free_video(image_bytes: bytes) -> bytes:
             "-vf",
             "scale=720:720:force_original_aspect_ratio=decrease,"
             "pad=720:720:(ow-iw)/2:(oh-ih)/2,"
-            "zoompan=z='min(zoom+0.0015,1.08)':d=150:s=720x720:fps=25,"
+            "zoompan="
+            "z='1.04+0.04*sin(on/35)':"
+            "x='iw/2-(iw/zoom/2)+30*sin(on/24)':"
+            "y='ih/2-(ih/zoom/2)+22*cos(on/29)':"
+            "d=150:s=720x720:fps=25,"
             "format=yuv420p",
             "-t", "6", "-an", "-movflags", "+faststart", video_path,
         )
