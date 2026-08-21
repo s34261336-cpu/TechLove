@@ -44,6 +44,8 @@ SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+BAI_API_KEY = os.environ.get("BAI_API_KEY", "")
+BAI_API_URL = "https://api.b.ai/v1/chat/completions"
 
 # Local speech-to-text settings. The model is downloaded only on the first
 # voice message and then reused for the lifetime of the bot process.
@@ -277,6 +279,26 @@ MODELS = {
         "emoji_html": pe("5323761960829862762", "⚡️"),
         "emoji_id": "5323761960829862762",
         "provider": "openrouter",
+    },
+    "bai_gpt_5_2": {
+        "name": "BAI · GPT-5.2",
+        "model_id": "gpt-5.2",
+        "description": "GPT-5.2 через BAI — сильная модель для сложных запросов.",
+        "emoji": "🧠",
+        "emoji_html": pe("5805553606635559688", "🧠"),
+        "emoji_id": "5805553606635559688",
+        "provider": "bai",
+        "max_tokens": 4096,
+    },
+    "bai_claude_sonnet": {
+        "name": "BAI · Claude Sonnet",
+        "model_id": "claude-sonnet-4-6",
+        "description": "Claude Sonnet через BAI — аккуратные тексты, анализ и код.",
+        "emoji": "🌟",
+        "emoji_html": pe("5258093637450866522", "🌟"),
+        "emoji_id": "5258093637450866522",
+        "provider": "bai",
+        "max_tokens": 4096,
     },
 }
 
@@ -1284,6 +1306,8 @@ def is_model_available(model: dict) -> bool:
         return bool(SAMBANOVA_API_KEY)
     if provider == "openrouter":
         return bool(OPENROUTER_API_KEY)
+    if provider == "bai":
+        return bool(BAI_API_KEY)
     return True
 
 
@@ -1305,6 +1329,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         ("groq",       "⚡️ GROQ"),
         ("sambanova",  "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
+        ("bai",        "✨ BAI"),
     ]
 
     rows: list[list[InlineKeyboardButton]] = [filter_row]
@@ -3034,6 +3059,9 @@ async def call_ai(session: dict, user_message: str) -> str:
     elif provider == "openrouter":
         api_url = OPENROUTER_API_URL
         api_key = OPENROUTER_API_KEY
+    elif provider == "bai":
+        api_url = BAI_API_URL
+        api_key = BAI_API_KEY
     else:
         api_url = GROQ_API_URL
         api_key = GROQ_API_KEY
