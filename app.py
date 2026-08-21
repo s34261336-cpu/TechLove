@@ -262,6 +262,15 @@ MODELS = {
         "emoji_id": "5388957777676745182",
         "provider": "openrouter",
     },
+    "or_free_router": {
+        "name": "OpenRouter Free Router",
+        "model_id": "openrouter/free",
+        "description": "Автоматически выбирает актуальную бесплатную модель OpenRouter.",
+        "emoji": "🎁",
+        "emoji_html": pe("5314536790874230525", "🎁"),
+        "emoji_id": "5314536790874230525",
+        "provider": "openrouter",
+    },
     "or_gpt_oss_20b": {
         "name": "GPT-OSS 20B",
         "model_id": "openai/gpt-oss-20b:free",
