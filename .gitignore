@@ -65,3 +65,6 @@ __pycache__/
 !.env.example
 *.pem
 *.key
+
+# Agent workspace metadata
+.agents/
