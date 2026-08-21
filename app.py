@@ -280,26 +280,6 @@ MODELS = {
         "emoji_id": "5323761960829862762",
         "provider": "openrouter",
     },
-    "bai_gpt_5_2": {
-        "name": "BAI · GPT-5.2",
-        "model_id": "gpt-5.2",
-        "description": "GPT-5.2 через BAI — сильная модель для сложных запросов.",
-        "emoji": "🧠",
-        "emoji_html": pe("5805553606635559688", "🧠"),
-        "emoji_id": "5805553606635559688",
-        "provider": "bai",
-        "max_tokens": 4096,
-    },
-    "bai_claude_sonnet": {
-        "name": "BAI · Claude Sonnet",
-        "model_id": "claude-sonnet-4-6",
-        "description": "Claude Sonnet через BAI — аккуратные тексты, анализ и код.",
-        "emoji": "🌟",
-        "emoji_html": pe("5258093637450866522", "🌟"),
-        "emoji_id": "5258093637450866522",
-        "provider": "bai",
-        "max_tokens": 4096,
-    },
 }
 
 SYSTEM_PROMPTS = {
@@ -1306,8 +1286,6 @@ def is_model_available(model: dict) -> bool:
         return bool(SAMBANOVA_API_KEY)
     if provider == "openrouter":
         return bool(OPENROUTER_API_KEY)
-    if provider == "bai":
-        return bool(BAI_API_KEY)
     return True
 
 
@@ -1329,7 +1307,6 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         ("groq",       "⚡️ GROQ"),
         ("sambanova",  "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
-        ("bai",        "✨ BAI"),
     ]
 
     rows: list[list[InlineKeyboardButton]] = [filter_row]
