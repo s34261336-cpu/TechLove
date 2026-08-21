@@ -46,6 +46,8 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 BAI_API_KEY = os.environ.get("BAI_API_KEY", "")
 BAI_API_URL = "https://api.b.ai/v1/chat/completions"
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
 # Local speech-to-text settings. The model is downloaded only on the first
 # voice message and then reused for the lifetime of the bot process.
@@ -288,6 +290,26 @@ MODELS = {
         "emoji_html": pe("5323761960829862762", "⚡️"),
         "emoji_id": "5323761960829862762",
         "provider": "openrouter",
+    },
+    "mistral_small": {
+        "name": "Mistral Small",
+        "model_id": "mistral-small-latest",
+        "description": "Быстрая универсальная модель Mistral для ежедневных задач.",
+        "emoji": "🇫🇷",
+        "emoji_html": pe("5258093637450866522", "🇫🇷"),
+        "emoji_id": "5258093637450866522",
+        "provider": "mistral",
+        "max_tokens": 4096,
+    },
+    "mistral_codestral": {
+        "name": "Codestral",
+        "model_id": "codestral-latest",
+        "description": "Модель Mistral для программирования и работы с кодом.",
+        "emoji": "💻",
+        "emoji_html": pe("5388957777676745182", "💻"),
+        "emoji_id": "5388957777676745182",
+        "provider": "mistral",
+        "max_tokens": 4096,
     },
 }
 
@@ -1295,6 +1317,8 @@ def is_model_available(model: dict) -> bool:
         return bool(SAMBANOVA_API_KEY)
     if provider == "openrouter":
         return bool(OPENROUTER_API_KEY)
+    if provider == "mistral":
+        return bool(MISTRAL_API_KEY)
     return True
 
 
@@ -1316,6 +1340,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         ("groq",       "⚡️ GROQ"),
         ("sambanova",  "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
+        ("mistral",    "🇫🇷 MISTRAL"),
     ]
 
     rows: list[list[InlineKeyboardButton]] = [filter_row]
@@ -3048,6 +3073,9 @@ async def call_ai(session: dict, user_message: str) -> str:
     elif provider == "bai":
         api_url = BAI_API_URL
         api_key = BAI_API_KEY
+    elif provider == "mistral":
+        api_url = MISTRAL_API_URL
+        api_key = MISTRAL_API_KEY
     else:
         api_url = GROQ_API_URL
         api_key = GROQ_API_KEY
