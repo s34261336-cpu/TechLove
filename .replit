@@ -9,13 +9,14 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python app.py"
+args = "bash scripts/start-bot.sh"
 
 [workflows.workflow.metadata]
 outputType = "console"
 
 [nix]
 channel = "stable-25_05"
+packages = ["ffmpeg"]
 
 [[ports]]
 localPort = 8080
