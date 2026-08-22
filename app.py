@@ -2847,10 +2847,20 @@ async def render_free_video(image_bytes: bytes) -> bytes:
     image_path = os.path.join(temp_dir, "source.png")
     video_path = os.path.join(temp_dir, "result.mp4")
     try:
+        ffmpeg_binary = shutil.which("ffmpeg")
+        if not ffmpeg_binary:
+            try:
+                import imageio_ffmpeg
+
+                ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
+            except (ImportError, RuntimeError) as error:
+                raise RuntimeError(
+                    "ffmpeg не найден. Установите ffmpeg или пакет imageio-ffmpeg."
+                ) from error
         with open(image_path, "wb") as image_file:
             image_file.write(image_bytes)
         process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-loglevel", "error",
+            ffmpeg_binary, "-y", "-loglevel", "error",
             "-loop", "1", "-i", image_path,
             "-vf",
             "scale=720:720:force_original_aspect_ratio=decrease,"
