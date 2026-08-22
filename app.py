@@ -1034,6 +1034,19 @@ def set_img_gen_price(price: int):
     data["_img_gen_price"] = max(0, price)
     save_restrictions(data)
 
+
+def get_video_gen_price() -> int:
+    """Returns how many free_gens one video generation costs. 0 = free for all."""
+    data = load_restrictions()
+    return data.get("_video_gen_price", 0)
+
+
+def set_video_gen_price(price: int):
+    data = load_restrictions()
+    data["_video_gen_price"] = max(0, price)
+    save_restrictions(data)
+
+
 def get_user_free_gens(user_id: int) -> int:
     data = load_users()
     return data.get(str(user_id), {}).get("free_gens", 0)
@@ -1067,17 +1080,21 @@ def refund_user_free_gens(user_id: int, amount: int) -> tuple[bool, int]:
     return True, data[uid]["free_gens"]
 
 def img_gen_info_text(user_id: int) -> str:
-    """Status line shown in the image generator UI."""
+    """Status lines shown in the media generator UI."""
     if is_vip(user_id):
         rem = get_vip_remaining(user_id)
         h = rem // 3600
         m = (rem % 3600) // 60
         return f"\n\n👑 <b>VIP:</b> генерации бесплатны! (истекает через {h}ч {m}м)"
-    price = get_img_gen_price()
-    if price == 0:
-        return "\n\n🎟 Генерации сейчас бесплатны."
     gens = get_user_free_gens(user_id)
-    return f"\n\n🎟 Стоимость: <b>{price} генерац.</b> | Ваш баланс: <b>{gens} 🎟</b>"
+    photo_price = get_img_gen_price()
+    video_price = get_video_gen_price()
+    photo_label = "бесплатно" if photo_price == 0 else f"{photo_price} 🎟"
+    video_label = "бесплатно" if video_price == 0 else f"{video_price} 🎟"
+    return (
+        f"\n\n🎟 <b>Стоимость:</b> фото — {photo_label} · видео — {video_label}"
+        f"\nВаш баланс: <b>{gens} 🎟</b>"
+    )
 
 
 # ─── Sessions ─────────────────────────────────────────────────────────────────
@@ -1145,6 +1162,7 @@ class AdminStates(StatesGroup):
     waiting_maintenance_reason = State()
     waiting_set_price = State()
     waiting_img_gen_price = State()
+    waiting_video_gen_price = State()
     waiting_prize_weight = State()
 
 
@@ -1343,7 +1361,13 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         ("mistral",    "🇫🇷 MISTRAL"),
     ]
 
-    rows: list[list[InlineKeyboardButton]] = [filter_row]
+    rows: list[list[InlineKeyboardButton]] = [
+        filter_row,
+        [InlineKeyboardButton(
+            text="ℹ️ Цена указана рядом с названием · ✅ — выбрано",
+            callback_data="noop",
+        )],
+    ]
     any_model = False
 
     for provider_key, provider_label in PROVIDER_GROUPS:
@@ -1430,14 +1454,12 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     maint_style = "danger" if is_maintenance() else "success"
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("📢 Рассылка", "admin:broadcast")],
-        [_btn("🪙 Выдать ZenoToken", "admin:give", "success")],
-        [_btn("📊 Статистика", "admin:stats")],
-        [_btn("👥 Список пользователей", "admin:users")],
+        [_btn("📢 Рассылка", "admin:broadcast"), _btn("🪙 Выдать ZenoToken", "admin:give", "success")],
+        [_btn("📊 Статистика", "admin:stats"), _btn("👥 Пользователи", "admin:users")],
         [_btn("🔍 Найти пользователя", "admin:find")],
         [_btn("🤖 Управление моделями", "admin:models")],
-        [_btn("💰 Цена за запрос", "admin:prices")],
-        [_btn("🎟 Цена за генерацию", "admin:imgprice")],
+        [_btn("💰 Цены моделей", "admin:prices")],
+        [_btn("🖼 Цена фото", "admin:imgprice"), _btn("🎬 Цена видео", "admin:videoprice")],
         [_btn("🎁 Управление кейсами", "admin:cases")],
         [_btn(test_label, "admin:testmode", test_style)],
         [_btn(maint_label, "admin:maintenance", maint_style)],
@@ -1445,24 +1467,38 @@ def admin_keyboard() -> InlineKeyboardMarkup:
 
 
 def admin_models_keyboard() -> InlineKeyboardMarkup:
-    """List of all models with restriction status indicator and matching emoji."""
-    buttons = []
-    for key, model in MODELS.items():
-        r = get_model_restriction(key)
-        if r:
-            if r["type"] == "temporary":
-                status = "⏳"
-            else:
-                status = "🔴"
-        else:
-            status = "🟢"
-        buttons.append([InlineKeyboardButton(
-            text=f"{status} {model['name']}",
-            callback_data=f"mctrl:info:{key}",
-            icon_custom_emoji_id=get_model_emoji_id(key),
-        )])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    """Group model controls by provider and show status plus current price."""
+    provider_groups = [
+        ("groq", "⚡ GROQ"),
+        ("sambanova", "🔥 SAMBANOVA"),
+        ("openrouter", "🌐 OPENROUTER"),
+        ("mistral", "🇫🇷 MISTRAL"),
+    ]
+    rows: list[list[InlineKeyboardButton]] = [[InlineKeyboardButton(
+        text="🟢 доступна · ⏳ временно · 🔴 отключена",
+        callback_data="noop",
+    )]]
+    for provider_key, provider_label in provider_groups:
+        group_buttons = []
+        for key, model in MODELS.items():
+            if model.get("provider", "groq") != provider_key:
+                continue
+            restriction = get_model_restriction(key)
+            status = "⏳" if restriction and restriction["type"] == "temporary" else (
+                "🔴" if restriction else "🟢"
+            )
+            price = get_model_price(key)
+            price_label = "🆓" if price == 0 else f"🪙{price}"
+            group_buttons.append(InlineKeyboardButton(
+                text=f"{status} {model['name']} · {price_label}",
+                callback_data=f"mctrl:info:{key}",
+                icon_custom_emoji_id=get_model_emoji_id(key),
+            ))
+        if group_buttons:
+            rows.append([InlineKeyboardButton(text=f"━━ {provider_label} ━━", callback_data="noop")])
+            rows += [group_buttons[i:i + 2] for i in range(0, len(group_buttons), 2)]
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def model_actions_keyboard(model_key: str) -> InlineKeyboardMarkup:
@@ -1960,6 +1996,50 @@ async def fsm_img_gen_price(message: Message, state: FSMContext):
     price_str = "🆓 Бесплатно для всех" if price == 0 else f"{price} 🎟 за генерацию"
     await message.answer(
         f"✅ <b>Цена обновлена!</b>\n\nГенерация изображения: <b>{price_str}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "admin:videoprice")
+async def cb_admin_video_price(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    current = get_video_gen_price()
+    price_str = "🆓 Бесплатно" if current == 0 else f"{current} 🎟 за генерацию"
+    await state.set_state(AdminStates.waiting_video_gen_price)
+    await callback.message.edit_text(
+        "🎬 <b>Цена за генерацию видео</b>\n\n"
+        f"Текущая цена: <b>{price_str}</b>\n\n"
+        "Введите новую цену в генерациях (целое число, 0 = бесплатно для всех):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_video_gen_price)
+async def fsm_video_gen_price(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        price = int(message.text.strip())
+        if price < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Введите целое число ≥ 0 (например: 0, 1, 2)",
+            reply_markup=admin_cancel_keyboard(),
+        )
+        return
+    set_video_gen_price(price)
+    await state.clear()
+    price_str = "🆓 Бесплатно для всех" if price == 0 else f"{price} 🎟 за генерацию"
+    await message.answer(
+        f"✅ <b>Цена обновлена!</b>\n\nГенерация видео: <b>{price_str}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
@@ -2626,9 +2706,9 @@ async def cmd_img(message: Message, state: FSMContext):
         "✨ <b>Генерация по описанию</b>\n\n"
         "Выберите, что создать:\n"
         "🖼 <b>Фото</b> — изображение по вашему описанию.\n"
-        "🎬 <b>Видео</b> — бесплатный короткий клип с плавной анимацией.\n\n"
+        "🎬 <b>Видео</b> — короткий клип с плавной анимацией.\n\n"
         f"🖼 Фото: {('🆓 Бесплатно' if get_img_gen_price() == 0 else f'{get_img_gen_price()} 🎟 за генерацию')}\n"
-        "🎬 Видео: 🆓 <b>Бесплатно</b>"
+        f"🎬 Видео: {('🆓 Бесплатно' if get_video_gen_price() == 0 else f'{get_video_gen_price()} 🎟 за генерацию')}"
         + img_gen_info_text(message.from_user.id)
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -2802,7 +2882,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     # Reserve free_gens before starting the long-running generation. This makes
     # two quick clicks unable to start two jobs while paying for only one.
-    price = 0 if is_video else get_img_gen_price()
+    price = get_video_gen_price() if is_video else get_img_gen_price()
     generation_charged = False
     generation_delivered = False
     if price > 0 and not is_admin(user_id) and not is_vip(user_id):
@@ -2949,7 +3029,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             video_bytes = await render_free_video(img_bytes)
             await callback.message.answer_video(
                 BufferedInputFile(video_bytes, filename="video.mp4"),
-                caption=f"🎬 <i>{prompt}</i>\n\n🆓 Бесплатная генерация",
+                caption=f"🎬 <i>{prompt}</i>\n\n{img_gen_info_text(user_id).strip()}",
                 parse_mode=ParseMode.HTML,
             )
         else:
