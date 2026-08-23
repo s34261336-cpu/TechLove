@@ -42,6 +42,8 @@ GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 SUPABASE_FACTS_URL = f"{SUPABASE_URL}/rest/v1/user_facts" if SUPABASE_URL else ""
+SUPABASE_STATE_URL = f"{SUPABASE_URL}/rest/v1/bot_state" if SUPABASE_URL else ""
+SUPABASE_SESSIONS_URL = f"{SUPABASE_URL}/rest/v1/user_sessions" if SUPABASE_URL else ""
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
@@ -166,6 +168,136 @@ def extract_user_facts(text: str) -> list[str]:
 async def persist_user_facts(user_id: int, text: str) -> None:
     for fact in extract_user_facts(text):
         await save_user_fact(user_id, fact)
+
+
+async def save_state_snapshot(state_key: str, state_value: Any) -> None:
+    """Persist a complete JSON-backed bot state in Supabase."""
+    if not SUPABASE_STATE_URL or not SUPABASE_KEY:
+        return
+    headers = {
+        **supabase_headers(),
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    payload = {"state_key": state_key, "state_value": state_value}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(
+                SUPABASE_STATE_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning(
+                        "Supabase state save failed for %s: HTTP %s",
+                        state_key,
+                        response.status,
+                    )
+    except Exception as exc:
+        logger.warning("Supabase state save failed for %s: %s", state_key, exc)
+
+
+def schedule_state_snapshot(state_key: str, state_value: Any) -> None:
+    """Queue a non-blocking state save when called from an async handler."""
+    if not SUPABASE_STATE_URL or not SUPABASE_KEY:
+        return
+    try:
+        asyncio.get_running_loop().create_task(save_state_snapshot(state_key, state_value))
+    except RuntimeError:
+        # Synchronous startup/file helpers can still safely use local JSON.
+        pass
+
+
+async def load_state_snapshot(state_key: str) -> Any | None:
+    if not SUPABASE_STATE_URL or not SUPABASE_KEY:
+        return None
+    params = {"state_key": f"eq.{state_key}", "select": "state_value", "limit": "1"}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(
+                SUPABASE_STATE_URL,
+                params=params,
+                headers=supabase_headers(),
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning(
+                        "Supabase state read failed for %s: HTTP %s",
+                        state_key,
+                        response.status,
+                    )
+                    return None
+                data = await response.json()
+        return data[0].get("state_value") if data else None
+    except Exception as exc:
+        logger.warning("Supabase state read failed for %s: %s", state_key, exc)
+        return None
+
+
+async def restore_state_snapshots() -> None:
+    """Restore remote state only when a corresponding Supabase row exists."""
+    state_files = (
+        ("users", USERS_FILE),
+        ("reminders", REMINDERS_FILE),
+        ("restrictions", MODELS_FILE),
+        ("cases", CASES_FILE),
+    )
+    for state_key, filename in state_files:
+        state_value = await load_state_snapshot(state_key)
+        if state_value is None:
+            continue
+        try:
+            with open(filename, "w", encoding="utf-8") as state_file:
+                json.dump(state_value, state_file, ensure_ascii=False, indent=2)
+            logger.info("Restored %s from Supabase", state_key)
+        except (OSError, TypeError):
+            logger.exception("Could not restore %s from Supabase", state_key)
+
+
+async def save_session_snapshot(user_id: int, session_data: dict) -> None:
+    if not SUPABASE_SESSIONS_URL or not SUPABASE_KEY:
+        return
+    headers = {
+        **supabase_headers(),
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    payload = {"user_id": user_id, "session_data": session_data}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(
+                SUPABASE_SESSIONS_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("Supabase session save failed: HTTP %s", response.status)
+    except Exception as exc:
+        logger.warning("Supabase session save failed: %s", exc)
+
+
+async def hydrate_user_session(user_id: int) -> None:
+    """Load a user's conversation/settings once after a process restart."""
+    if user_id in hydrated_sessions or not SUPABASE_SESSIONS_URL or not SUPABASE_KEY:
+        return
+    params = {"user_id": f"eq.{user_id}", "select": "session_data", "limit": "1"}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(
+                SUPABASE_SESSIONS_URL,
+                params=params,
+                headers=supabase_headers(),
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("Supabase session read failed: HTTP %s", response.status)
+                    return
+                data = await response.json()
+        if data and isinstance(data[0].get("session_data"), dict):
+            user_sessions[user_id] = data[0]["session_data"]
+        hydrated_sessions.add(user_id)
+    except Exception as exc:
+        logger.warning("Supabase session read failed: %s", exc)
 
 
 # ─── Premium emoji helper ─────────────────────────────────────────────────────
@@ -574,6 +706,7 @@ def load_users() -> dict:
 def save_users(data: dict):
     with open(USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    schedule_state_snapshot("users", data)
 
 def get_user_profile(user_id: int, first_name: str = "", username: str = "") -> dict:
     data = load_users()
@@ -721,6 +854,7 @@ def load_reminders() -> list[dict]:
 def save_reminders(data: list[dict]):
     with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    schedule_state_snapshot("reminders", data)
 
 
 def _remove_reminder_metadata(text: str) -> str:
@@ -922,6 +1056,7 @@ def load_restrictions() -> dict:
 def save_restrictions(data: dict):
     with open(MODELS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    schedule_state_snapshot("restrictions", data)
 
 def get_model_restriction(model_key: str) -> dict | None:
     """Returns restriction dict if model is currently restricted, else None."""
@@ -986,6 +1121,7 @@ def load_cases() -> dict:
 def save_cases(data: dict):
     with open(CASES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    schedule_state_snapshot("cases", data)
 
 def get_all_cases() -> list:
     """Return list of all case dicts."""
@@ -1204,6 +1340,7 @@ def img_gen_info_text(user_id: int) -> str:
 # ─── Sessions ─────────────────────────────────────────────────────────────────
 
 user_sessions: dict[int, dict] = {}
+hydrated_sessions: set[int] = set()
 
 admin_test_mode: bool = False  # When True, admin is treated as a regular user
 
@@ -4065,6 +4202,7 @@ async def process_text_message(message: Message, text: str):
         await message.answer(simple_greeting)
         return
 
+    await hydrate_user_session(user_id)
     session = get_session(user_id)
     model = MODELS[session["model"]]
 
@@ -4135,6 +4273,8 @@ async def process_text_message(message: Message, text: str):
         reply = await call_ai(session, text, user_id)
         if SUPABASE_FACTS_URL and SUPABASE_KEY:
             asyncio.create_task(persist_user_facts(user_id, text))
+        if SUPABASE_SESSIONS_URL and SUPABASE_KEY:
+            asyncio.create_task(save_session_snapshot(user_id, session))
 
         try:
             await thinking_msg.delete()
@@ -4747,6 +4887,7 @@ async def main():
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
     dp.include_router(router)
+    await restore_state_snapshots()
     reminder_task = asyncio.create_task(reminder_worker(bot))
 
     try:

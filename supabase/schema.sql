@@ -11,7 +11,24 @@ create table if not exists public.user_facts (
 create index if not exists user_facts_user_id_created_at_idx
     on public.user_facts (user_id, created_at desc);
 
+create table if not exists public.bot_state (
+    state_key text primary key,
+    state_value jsonb not null,
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists public.user_sessions (
+    user_id bigint primary key,
+    session_data jsonb not null,
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists user_sessions_updated_at_idx
+    on public.user_sessions (updated_at desc);
+
 alter table public.user_facts enable row level security;
+alter table public.bot_state enable row level security;
+alter table public.user_sessions enable row level security;
 
 -- Keep RLS enabled and do not add public policies. The bot must use the
 -- server-side service_role SUPABASE_KEY, which bypasses RLS. Never expose it
