@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_FACTS_URL = f"{SUPABASE_URL}/rest/v1/user_facts" if SUPABASE_URL else ""
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
@@ -62,6 +65,107 @@ CASES_FILE = "cases_data.json"
 REMINDERS_FILE = "reminders_data.json"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 REMINDERS_LOCK = threading.Lock()
+
+
+# ─── Supabase user memory ────────────────────────────────────────────────────
+
+def supabase_headers() -> dict[str, str]:
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+async def load_user_facts(user_id: int) -> list[str]:
+    """Load durable user facts from Supabase for the current conversation."""
+    if not SUPABASE_FACTS_URL or not SUPABASE_KEY:
+        return []
+
+    params = {
+        "user_id": f"eq.{user_id}",
+        "select": "fact",
+        "order": "created_at.desc",
+        "limit": "40",
+    }
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(
+                SUPABASE_FACTS_URL,
+                params=params,
+                headers=supabase_headers(),
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("Supabase facts read failed: HTTP %s", response.status)
+                    return []
+                data = await response.json()
+        return [item["fact"] for item in data if isinstance(item, dict) and item.get("fact")]
+    except Exception as exc:
+        logger.warning("Supabase facts read failed: %s", exc)
+        return []
+
+
+async def save_user_fact(user_id: int, fact: str) -> None:
+    """Save one fact, ignoring duplicates so repeated messages stay harmless."""
+    if not SUPABASE_FACTS_URL or not SUPABASE_KEY or not fact:
+        return
+
+    headers = {
+        **supabase_headers(),
+        "Prefer": "resolution=ignore-duplicates,return=minimal",
+    }
+    payload = {"user_id": user_id, "fact": fact, "source": "conversation"}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(
+                SUPABASE_FACTS_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("Supabase fact save failed: HTTP %s", response.status)
+    except Exception as exc:
+        logger.warning("Supabase fact save failed: %s", exc)
+
+
+def extract_user_facts(text: str) -> list[str]:
+    """Extract explicit, low-risk facts without making an extra paid AI call."""
+    if not text:
+        return []
+
+    blocked = (
+        "парол", "токен", "api key", "api_key", "секрет", "карт", "паспорт",
+        "код подтверждения", "cvv", "cvc", "кошел", "seed phrase",
+    )
+    normalized = " ".join(text.split()).strip()
+    if any(word in normalized.casefold() for word in blocked):
+        return []
+
+    patterns = (
+        (r"\bменя зовут\s+([^.!?\n,]{2,60})", "Пользователя зовут {}."),
+        (r"\bмне\s+(\d{1,3})\s+лет\b", "Пользователю {} лет."),
+        (r"\bя живу\s+(?:в|на)\s+([^.!?\n,]{2,60})", "Пользователь живёт в {}."),
+        (r"\bя работаю\s+(?:в|на|как)\s+([^.!?\n]{2,80})", "Пользователь работает {}."),
+        (r"\bя люблю\s+([^.!?\n]{2,80})", "Пользователь любит {}."),
+        (r"\bя не люблю\s+([^.!?\n]{2,80})", "Пользователь не любит {}."),
+        (r"\bу меня есть\s+([^.!?\n]{2,80})", "У пользователя есть {}."),
+    )
+    facts = []
+    for pattern, template in patterns:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if match:
+            value = match.group(1).strip(" .,:;")
+            fact = template.format(value)
+            if fact not in facts:
+                facts.append(fact)
+    return facts[:3]
+
+
+async def persist_user_facts(user_id: int, text: str) -> None:
+    for fact in extract_user_facts(text):
+        await save_user_fact(user_id, fact)
 
 
 # ─── Premium emoji helper ─────────────────────────────────────────────────────
@@ -3122,7 +3226,7 @@ async def cb_img_home(callback: CallbackQuery, state: FSMContext):
 
 # ─── Groq API ─────────────────────────────────────────────────────────────────
 
-async def call_ai(session: dict, user_message: str) -> str:
+async def call_ai(session: dict, user_message: str, user_id: int | None = None) -> str:
     model_cfg = MODELS[session["model"]]
     model_id = model_cfg["model_id"]
 
@@ -3130,6 +3234,14 @@ async def call_ai(session: dict, user_message: str) -> str:
     style_key = session.get("style", "calm")
     style_instruction = STYLES[style_key]["instruction"]
     mood_instruction = detect_mood(user_message)
+    user_facts = await load_user_facts(user_id) if user_id is not None else []
+    memory_instruction = ""
+    if user_facts:
+        memory_instruction = (
+            "\n\nСОХРАНЁННЫЕ ФАКТЫ О ПОЛЬЗОВАТЕЛЕ:\n"
+            + "\n".join(f"• {fact}" for fact in user_facts)
+            + "\nУчитывай эти факты естественно, но не упоминай сам факт сохранения памяти."
+        )
     system_prompt = (
         f"Сегодняшняя дата: {today}. Используй эту дату как актуальную текущую дату и год, "
         f"а не дату из своих обучающих данных.\n\n"
@@ -3137,6 +3249,7 @@ async def call_ai(session: dict, user_message: str) -> str:
         f"СТИЛЬ ОБЩЕНИЯ: {style_instruction}\n\n"
         f"СИГНАЛ НАСТРОЕНИЯ В ПОСЛЕДНЕМ СООБЩЕНИИ: {mood_instruction}\n\n"
         f"{COMMON_INSTRUCTIONS}"
+        f"{memory_instruction}"
     )
 
     history_snapshot = list(session["history"])
@@ -4019,7 +4132,9 @@ async def process_text_message(message: Message, text: str):
     typing_task = asyncio.create_task(keep_typing())
 
     try:
-        reply = await call_ai(session, text)
+        reply = await call_ai(session, text, user_id)
+        if SUPABASE_FACTS_URL and SUPABASE_KEY:
+            asyncio.create_task(persist_user_facts(user_id, text))
 
         try:
             await thinking_msg.delete()
