@@ -5,6 +5,7 @@ import logging
 import json
 import tempfile
 import shutil
+import subprocess
 import threading
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -3057,6 +3058,9 @@ async def enhance_image_prompt(prompt: str, is_hd: bool = False) -> str:
                     "Preserve the exact subject, intent, people, objects, and requested text. "
                     "Add a fitting visual style, composition, camera/lens language when useful, "
                     "atmosphere, lighting, color palette, materials, depth, and small realistic details. "
+                    "When people or faces are present, prioritize sharp facial anatomy, clear expressive eyes, "
+                    "natural skin texture, accurate pupils and catchlights, and crisp focus on the face. "
+                    "Avoid blur, soft focus, smeared features, warped eyes, extra fingers, and plastic skin. "
                     f"{quality} "
                     "Do not add new subjects or change the scene. Output ONLY the final prompt, "
                     "with no preamble, labels, quotes, or explanation."
@@ -3088,7 +3092,8 @@ def fallback_image_prompt(prompt: str, is_hd: bool = False) -> str:
     )
     return (
         f"{prompt}. Distinctive visual style, thoughtful composition, cinematic natural lighting, "
-        f"rich but realistic colors, depth and fine details, {quality}."
+        f"rich but realistic colors, depth and fine details, sharp focus on faces and eyes when present, "
+        f"natural skin texture, no blur or warped features, {quality}."
     )
 
 
@@ -3098,7 +3103,7 @@ async def generate_flux_image(prompt: str, is_hd: bool = False) -> bytes:
     size = 1024 if is_hd else 768
     image_url = (
         f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-        f"?model=flux&width={size}&height={size}&nologo=true"
+        f"?model=flux&width={size}&height={size}&nologo=true&enhance=true"
     )
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -3117,29 +3122,41 @@ async def generate_flux_image(prompt: str, is_hd: bool = False) -> bytes:
             return image_bytes
 
 
-async def render_free_video(image_bytes: bytes) -> bytes:
-    """Turn a generated image into a short animated MP4 without paid APIs."""
+def _get_ffmpeg_binary() -> str:
+    """Find FFmpeg on Replit, BotHost, or a copied Python environment."""
+    configured = os.environ.get("FFMPEG_BINARY", "").strip()
+    if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
+
+    system_binary = shutil.which("ffmpeg")
+    if system_binary:
+        return system_binary
+
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError, OSError) as error:
+        raise RuntimeError(
+            "FFmpeg не найден. Установите imageio-ffmpeg или задайте FFMPEG_BINARY."
+        ) from error
+
+
+def _render_video_sync(image_bytes: bytes) -> bytes:
+    """Render a short MP4 in a normal thread for hosts with limited asyncio support."""
     temp_dir = tempfile.mkdtemp(prefix="zeno-video-")
     image_path = os.path.join(temp_dir, "source.png")
     video_path = os.path.join(temp_dir, "result.mp4")
     try:
-        ffmpeg_binary = shutil.which("ffmpeg")
-        if not ffmpeg_binary:
-            try:
-                import imageio_ffmpeg
-
-                ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
-            except (ImportError, RuntimeError) as error:
-                raise RuntimeError(
-                    "ffmpeg не найден. Установите ffmpeg или пакет imageio-ffmpeg."
-                ) from error
+        ffmpeg_binary = _get_ffmpeg_binary()
         with open(image_path, "wb") as image_file:
             image_file.write(image_bytes)
-        process = await asyncio.create_subprocess_exec(
+        command = [
             ffmpeg_binary, "-y", "-loglevel", "error",
             "-loop", "1", "-i", image_path,
             "-vf",
             "scale=720:720:force_original_aspect_ratio=decrease,"
+            "unsharp=5:5:0.7:5:5:0.0,"
             "pad=720:720:(ow-iw)/2:(oh-ih)/2,"
             "zoompan="
             "z='1.04+0.04*sin(on/35)':"
@@ -3147,15 +3164,29 @@ async def render_free_video(image_bytes: bytes) -> bytes:
             "y='ih/2-(ih/zoom/2)+22*cos(on/29)':"
             "d=150:s=720x720:fps=25,"
             "format=yuv420p",
-            "-t", "6", "-an", "-movflags", "+faststart", video_path,
+            "-t", "6", "-an", "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            video_path,
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
         )
-        return_code = await process.wait()
-        if return_code != 0 or not os.path.exists(video_path):
-            raise ValueError("Не удалось собрать видео")
+        if result.returncode != 0 or not os.path.exists(video_path):
+            details = (result.stderr or "неизвестная ошибка FFmpeg").strip()[-500:]
+            raise ValueError(f"Не удалось собрать видео: {details}")
         with open(video_path, "rb") as video_file:
             return video_file.read()
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+async def render_free_video(image_bytes: bytes) -> bytes:
+    """Turn a generated image into a short animated MP4 without blocking polling."""
+    return await asyncio.to_thread(_render_video_sync, image_bytes)
 
 
 @router.callback_query(ImgStates.has_prompt, F.data.startswith("img:generate"))
