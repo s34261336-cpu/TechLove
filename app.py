@@ -3155,8 +3155,53 @@ def _get_ffmpeg_binary() -> str:
     return _get_ffmpeg_binaries()[0]
 
 
+def _render_video_pyav(image_bytes: bytes) -> bytes:
+    """Encode a short MP4 through PyAV without requiring an FFmpeg executable."""
+    from io import BytesIO
+
+    import av
+
+    source = av.open(BytesIO(image_bytes))
+    try:
+        source_frame = next(source.decode(video=0))
+    finally:
+        source.close()
+
+    image = source_frame.to_ndarray(format="rgb24")
+    output_buffer = BytesIO()
+    output = av.open(output_buffer, mode="w", format="mp4")
+    try:
+        stream = output.add_stream("mpeg4", rate=25)
+        stream.width = 720
+        stream.height = 720
+        stream.pix_fmt = "yuv420p"
+        for frame_number in range(150):
+            video_frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+            video_frame = video_frame.reformat(
+                width=720,
+                height=720,
+                format="yuv420p",
+            )
+            video_frame.pts = frame_number
+            for packet in stream.encode(video_frame):
+                output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
+    finally:
+        output.close()
+    return output_buffer.getvalue()
+
+
 def _render_video_sync(image_bytes: bytes) -> bytes:
     """Render a short MP4 in a normal thread for hosts with limited asyncio support."""
+    try:
+        video_bytes = _render_video_pyav(image_bytes)
+        if video_bytes:
+            logger.info("Video encoded through PyAV")
+            return video_bytes
+    except Exception as pyav_error:
+        logger.warning("PyAV video encoding failed; trying FFmpeg: %s", pyav_error)
+
     temp_dir = tempfile.mkdtemp(prefix="zeno-video-")
     image_path = os.path.join(temp_dir, "source.png")
     video_path = os.path.join(temp_dir, "result.mp4")
