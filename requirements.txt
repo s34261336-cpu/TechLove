@@ -9,3 +9,8 @@ aiohttp
 faster-whisper
 groq
 imageio-ffmpeg
+aiogram==3.30.0
+aiohttp
+faster-whisper
+groq
+imageio-ffmpeg
