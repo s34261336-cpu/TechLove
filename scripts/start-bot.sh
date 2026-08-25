@@ -40,4 +40,11 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
   fi
 fi
 
+if ! python -c "import imageio_ffmpeg" >/dev/null 2>&1; then
+  log "Не найден imageio-ffmpeg; устанавливаю зависимость для генерации видео."
+  if ! python -m pip install --user --quiet --disable-pip-version-check imageio-ffmpeg; then
+    log "Не удалось установить imageio-ffmpeg; бот будет запущен без генерации видео."
+  fi
+fi
+
 exec python app.py
