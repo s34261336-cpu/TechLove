@@ -3122,24 +3122,37 @@ async def generate_flux_image(prompt: str, is_hd: bool = False) -> bytes:
             return image_bytes
 
 
-def _get_ffmpeg_binary() -> str:
-    """Find FFmpeg on Replit, BotHost, or a copied Python environment."""
+def _get_ffmpeg_binaries() -> list[str]:
+    """Return usable FFmpeg binaries, preferring the bundled portable one."""
+    binaries: list[str] = []
     configured = os.environ.get("FFMPEG_BINARY", "").strip()
     if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
-        return configured
-
-    system_binary = shutil.which("ffmpeg")
-    if system_binary:
-        return system_binary
+        binaries.append(configured)
 
     try:
         import imageio_ffmpeg
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        bundled_binary = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled_binary and os.path.isfile(bundled_binary):
+            binaries.append(bundled_binary)
     except (ImportError, RuntimeError, OSError) as error:
+        logger.warning("Bundled FFmpeg is unavailable: %s", error)
+
+    system_binary = shutil.which("ffmpeg")
+    if system_binary:
+        binaries.append(system_binary)
+
+    unique_binaries = list(dict.fromkeys(binaries))
+    if not unique_binaries:
         raise RuntimeError(
             "FFmpeg не найден. Установите imageio-ffmpeg или задайте FFMPEG_BINARY."
-        ) from error
+        )
+    return unique_binaries
+
+
+def _get_ffmpeg_binary() -> str:
+    """Return the first usable FFmpeg binary for compatibility with callers."""
+    return _get_ffmpeg_binaries()[0]
 
 
 def _render_video_sync(image_bytes: bytes) -> bytes:
@@ -3148,38 +3161,42 @@ def _render_video_sync(image_bytes: bytes) -> bytes:
     image_path = os.path.join(temp_dir, "source.png")
     video_path = os.path.join(temp_dir, "result.mp4")
     try:
-        ffmpeg_binary = _get_ffmpeg_binary()
         with open(image_path, "wb") as image_file:
             image_file.write(image_bytes)
-        command = [
-            ffmpeg_binary, "-y", "-loglevel", "error",
-            "-loop", "1", "-i", image_path,
-            "-vf",
-            "scale=720:720:force_original_aspect_ratio=decrease,"
-            "unsharp=5:5:0.7:5:5:0.0,"
-            "pad=720:720:(ow-iw)/2:(oh-ih)/2,"
-            "zoompan="
-            "z='1.04+0.04*sin(on/35)':"
-            "x='iw/2-(iw/zoom/2)+30*sin(on/24)':"
-            "y='ih/2-(ih/zoom/2)+22*cos(on/29)':"
-            "d=150:s=720x720:fps=25,"
-            "format=yuv420p",
-            "-t", "6", "-an", "-c:v", "libx264", "-preset", "veryfast",
-            "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-            video_path,
-        ]
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=90,
-            check=False,
-        )
-        if result.returncode != 0 or not os.path.exists(video_path):
-            details = (result.stderr or "неизвестная ошибка FFmpeg").strip()[-500:]
-            raise ValueError(f"Не удалось собрать видео: {details}")
-        with open(video_path, "rb") as video_file:
-            return video_file.read()
+        last_error = "неизвестная ошибка FFmpeg"
+        for ffmpeg_binary in _get_ffmpeg_binaries():
+            command = [
+                ffmpeg_binary, "-y", "-loglevel", "error",
+                "-loop", "1", "-i", image_path,
+                "-vf",
+                "scale=720:720:force_original_aspect_ratio=decrease,"
+                "unsharp=5:5:0.7:5:5:0.0,"
+                "pad=720:720:(ow-iw)/2:(oh-ih)/2,"
+                "zoompan="
+                "z='1.04+0.04*sin(on/35)':"
+                "x='iw/2-(iw/zoom/2)+30*sin(on/24)':"
+                "y='ih/2-(ih/zoom/2)+22*cos(on/29)':"
+                "d=150:s=720x720:fps=25,"
+                "format=yuv420p",
+                "-t", "6", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                video_path,
+            ]
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            if result.returncode == 0 and os.path.exists(video_path):
+                with open(video_path, "rb") as video_file:
+                    return video_file.read()
+            last_error = (result.stderr or "неизвестная ошибка FFmpeg").strip()[-500:]
+            logger.warning("FFmpeg binary failed (%s): %s", ffmpeg_binary, last_error)
+            if os.path.exists(video_path):
+                os.remove(video_path)
+        raise ValueError(f"Не удалось собрать видео: {last_error}")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -3387,7 +3404,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         )
 
     except Exception as e:
-        logger.error(f"Image gen error: {e}")
+        logger.exception("Image gen error: %s", e)
         if generation_charged and not generation_delivered:
             refunded, balance = refund_user_free_gens(user_id, price)
             if refunded:
