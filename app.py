@@ -16,6 +16,7 @@ import aiohttp
 from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 from io import BytesIO
 import base64
+from html import escape as html_escape
 from html.parser import HTMLParser
 
 from typing import Any, Awaitable, Callable
@@ -2929,9 +2930,10 @@ async def cb_open_model(callback: CallbackQuery):
 
 IMG_WELCOME_TEXT = (
     "🎨 <b>Генератор изображений</b>\n\n"
-    "Я создам картинку по вашему описанию с помощью нейросети Pollinations AI.\n\n"
+    "Я создам картинку по вашему описанию с помощью Flux.\n\n"
     "✦ Чем подробнее описание — тем лучше результат.\n"
-    "✦ Можно писать на русском или английском."
+    "✦ Можно писать на русском или английском.\n"
+    "✦ Перед генерацией я сам улучшу промпт: стиль, свет и детали."
 )
 
 
@@ -3003,16 +3005,20 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
     except TelegramBadRequest:
         pass
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=("🎬 Создать видео" if data.get("media_type") == "video" else "🖼 Создать фото"),
-            callback_data="img:generate", style="success"
-        )],
-        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
-    ])
+    kb_rows = [[InlineKeyboardButton(
+        text=("🎬 Создать видео" if data.get("media_type") == "video" else "🖼 Создать фото"),
+        callback_data="img:generate", style="success"
+    )]]
+    if data.get("media_type") != "video":
+        kb_rows.append([InlineKeyboardButton(
+            text="⚡ HD — максимальное качество",
+            callback_data="img:generate:hd", style="primary"
+        )])
+    kb_rows.append([InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     text = (
         f"{IMG_WELCOME_TEXT}\n\n"
-        f"<b>Ваш промт:</b>\n<i>{prompt}</i>"
+        f"<b>Ваш промт:</b>\n<i>{html_escape(prompt)}</i>"
     )
 
     img_msg_id = data.get("img_msg_id")
@@ -3031,17 +3037,29 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
-async def translate_prompt(prompt: str) -> str:
-    """Translate prompt to English using Groq for better image generation results."""
+async def enhance_image_prompt(prompt: str, is_hd: bool = False) -> str:
+    """Turn a short user prompt into a detailed Flux-ready image prompt."""
+    quality = (
+        "Use maximum quality: ultra-detailed, crisp micro-textures, "
+        "professional 8K look, high dynamic range, clean fine details."
+        if is_hd
+        else
+        "Use a polished high-quality result with clear details and natural textures."
+    )
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "You are a prompt translator for image generation. "
-                    "Translate the user's description into a detailed English image generation prompt. "
-                    "Keep all visual details. Output ONLY the English prompt, nothing else."
+                    "You are an expert prompt engineer for the Flux image model. "
+                    "Rewrite the user's request as one detailed English image prompt. "
+                    "Preserve the exact subject, intent, people, objects, and requested text. "
+                    "Add a fitting visual style, composition, camera/lens language when useful, "
+                    "atmosphere, lighting, color palette, materials, depth, and small realistic details. "
+                    f"{quality} "
+                    "Do not add new subjects or change the scene. Output ONLY the final prompt, "
+                    "with no preamble, labels, quotes, or explanation."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -3059,12 +3077,28 @@ async def translate_prompt(prompt: str) -> str:
             return data["choices"][0]["message"]["content"].strip()
 
 
-async def generate_pollinations_image(prompt: str) -> bytes:
-    """Generate an image through Pollinations' public image endpoint."""
+def fallback_image_prompt(prompt: str, is_hd: bool = False) -> str:
+    """Keep generation useful if the prompt-enhancement model is unavailable."""
+    quality = (
+        "ultra-detailed 8K look, crisp micro-textures, high dynamic range, "
+        "professional studio quality"
+        if is_hd
+        else
+        "high-quality detailed rendering, natural textures"
+    )
+    return (
+        f"{prompt}. Distinctive visual style, thoughtful composition, cinematic natural lighting, "
+        f"rich but realistic colors, depth and fine details, {quality}."
+    )
+
+
+async def generate_flux_image(prompt: str, is_hd: bool = False) -> bytes:
+    """Generate through Pollinations' Flux endpoint without requiring another API key."""
     encoded_prompt = url_quote(prompt, safe="")
+    size = 1024 if is_hd else 768
     image_url = (
         f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-        "?width=512&height=512&nologo=true"
+        f"?model=flux&width={size}&height={size}&nologo=true"
     )
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -3075,11 +3109,11 @@ async def generate_pollinations_image(prompt: str) -> bytes:
             if response.status != 200:
                 body = await response.text()
                 raise ValueError(
-                    f"Pollinations HTTP {response.status}: {body[:200]}"
+                    f"Flux HTTP {response.status}: {body[:200]}"
                 )
             image_bytes = await response.read()
             if not image_bytes:
-                raise ValueError("Pollinations: пустое изображение")
+                raise ValueError("Flux: пустое изображение")
             return image_bytes
 
 
@@ -3124,13 +3158,15 @@ async def render_free_video(image_bytes: bytes) -> bytes:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-@router.callback_query(ImgStates.has_prompt, F.data == "img:generate")
+@router.callback_query(ImgStates.has_prompt, F.data.startswith("img:generate"))
 async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     data = await state.get_data()
     prompt = data.get("current_prompt", "")
     media_type = data.get("media_type", "photo")
     is_video = media_type == "video"
+    is_hd = callback.data == "img:generate:hd" and not is_video
+    quality_label = "HD · максимальное качество" if is_hd else "Flux"
 
     # Reserve free_gens before starting the long-running generation. This makes
     # two quick clicks unable to start two jobs while paying for only one.
@@ -3159,27 +3195,34 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
     try:
         await callback.message.edit_text(
-            f"⏳ <b>Готовлю {'видео' if is_video else 'фото'} по вашему описанию...</b>\n\n<i>{prompt}</i>",
+            f"⏳ <b>Готовлю {'видео' if is_video else 'фото'}...</b>\n"
+            f"<i>Улучшаю промпт и запускаю {quality_label}</i>\n\n"
+            f"<i>{html_escape(prompt)}</i>",
             parse_mode=ParseMode.HTML
         )
 
-        # Send the user's prompt unchanged. Rewriting it through another model
-        # can silently replace important subjects, details, and style choices.
-        image_prompt = prompt
-        logger.info(f"Img prompt used unchanged: '{image_prompt}'")
+        try:
+            image_prompt = await enhance_image_prompt(prompt, is_hd=is_hd)
+            if not image_prompt:
+                raise ValueError("empty enhanced prompt")
+        except Exception as prompt_error:
+            logger.warning(f"Prompt enhancement failed, using local enhancer: {prompt_error}")
+            image_prompt = fallback_image_prompt(prompt, is_hd=is_hd)
+        logger.info("Image prompt enhanced for %s generation", quality_label)
 
         await callback.message.edit_text(
-            f"{'🎬' if is_video else '🎨'} <b>Готовлю медиа...</b>\n\n<i>{prompt}</i>",
+            f"{'🎬' if is_video else '🎨'} <b>Готовлю медиа через {quality_label}...</b>\n\n"
+            f"<i>{html_escape(prompt)}</i>",
             parse_mode=ParseMode.HTML
         )
 
-        # Pollinations is fast and does not require a provider key. Keep
-        # Stable Horde as a fallback because public services can rate-limit.
+        # Flux is the primary generator. Keep Stable Horde as a fallback because
+        # public image endpoints can occasionally rate-limit or time out.
         try:
-            img_bytes = await generate_pollinations_image(image_prompt)
-            logger.info("Image generated through Pollinations")
-        except Exception as pollinations_error:
-            logger.warning(f"Pollinations image generation failed: {pollinations_error}")
+            img_bytes = await generate_flux_image(image_prompt, is_hd=is_hd)
+            logger.info("Image generated through Flux")
+        except Exception as flux_error:
+            logger.warning(f"Flux image generation failed: {flux_error}")
 
             HORDE_URL = "https://stablehorde.net/api/v2"
             horde_headers = {
@@ -3190,9 +3233,9 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             horde_payload = {
                 "prompt": image_prompt,
                 "params": {
-                    "width": 512,
-                    "height": 512,
-                    "steps": 20,
+                    "width": 1024 if is_hd else 768,
+                    "height": 1024 if is_hd else 768,
+                    "steps": 28 if is_hd else 20,
                     "n": 1,
                     "sampler_name": "k_euler_a",
                     "cfg_scale": 7.5,
@@ -3235,8 +3278,8 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                     queue_pos = check.get("queue_position", "?")
                     try:
                         await callback.message.edit_text(
-                            f"🎨 <b>Рисую...</b>\n\n"
-                            f"<i>{prompt}</i>\n\n"
+                            f"🎨 <b>Рисую резервным генератором...</b>\n\n"
+                            f"<i>{html_escape(prompt)}</i>\n\n"
                             f"⏱ ~{wait_time}с · позиция в очереди: {queue_pos}",
                             parse_mode=ParseMode.HTML,
                         )
@@ -3275,20 +3318,20 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
         if is_video:
             await callback.message.edit_text(
-                f"🎬 <b>Анимирую видео...</b>\n\n<i>{prompt}</i>",
+                f"🎬 <b>Анимирую видео...</b>\n\n<i>{html_escape(prompt)}</i>",
                 parse_mode=ParseMode.HTML,
             )
             video_bytes = await render_free_video(img_bytes)
             await callback.message.answer_video(
                 BufferedInputFile(video_bytes, filename="video.mp4"),
-                caption=f"🎬 <i>{prompt}</i>\n\n{img_gen_info_text(user_id).strip()}",
+                caption=f"🎬 <i>{html_escape(prompt)}</i>\n\n{img_gen_info_text(user_id).strip()}",
                 parse_mode=ParseMode.HTML,
             )
         else:
             photo = BufferedInputFile(img_bytes, filename="image.png")
             await callback.message.answer_photo(
                 photo,
-                caption=f"🎨 <i>{prompt}</i>",
+                caption=f"🎨 <b>{quality_label}</b>\n<i>{html_escape(prompt)}</i>",
                 parse_mode=ParseMode.HTML,
             )
         generation_delivered = True
@@ -3298,12 +3341,16 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 text=("🎬 Создать ещё видео" if is_video else "🖼 Создать ещё фото"),
                 callback_data="img:generate", style="success"
             )],
+            [InlineKeyboardButton(
+                text="⚡ HD — максимальное качество",
+                callback_data="img:generate:hd", style="primary"
+            )] if not is_video else [],
             [InlineKeyboardButton(text="🔁 Выбрать фото/видео", callback_data="img:home")],
             [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt", style="primary")],
         ])
         await callback.message.edit_text(
             f"{'🎬 Видео готово' if is_video else IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n"
-            f"<b>Последний промт:</b>\n<i>{prompt}</i>",
+            f"<b>Последний промт:</b>\n<i>{html_escape(prompt)}</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_menu
         )
@@ -3325,6 +3372,10 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 )
         kb_err = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="img:generate", style="primary")],
+            [InlineKeyboardButton(
+                text="⚡ Повторить в HD",
+                callback_data="img:generate:hd", style="primary"
+            )] if not is_video else [],
             [InlineKeyboardButton(text="✏️ Новый промт", callback_data="img:prompt")],
         ])
         await callback.message.edit_text(
