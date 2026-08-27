@@ -3846,7 +3846,8 @@ SEARCH_STOP_WORDS = {
     "нет", "ни", "но", "о", "об", "он", "она", "они", "по", "под", "при", "про",
     "с", "со", "так", "то", "у", "уже", "что", "чем", "это", "эти", "этот", "я",
     "сравни", "сравнить", "сравнение", "цена", "цены", "стоимость", "характеристики",
-    "характеристика", "последний", "последние", "месяц", "месяца", "месяцев",
+    "характеристика", "характеристикам", "последний", "последние", "месяц", "месяца", "месяцев",
+    "цене", "ценой",
     "обзор", "обзоры", "плюсы", "минусы", "новости", "купить", "россия", "россии",
     "the", "and", "for", "from", "how", "what", "when", "where",
 }
@@ -4011,17 +4012,19 @@ async def search_web(
     query: str,
     freshness: str | None = None,
     min_token_matches: int = 1,
+    prefer_duckduckgo: bool = False,
 ) -> list[dict[str, str]]:
     """Fetch current web results without requiring another API key."""
     encoded_query = url_quote(query, safe="")
     freshness_suffix = f"&freshness={freshness}" if freshness else ""
-    search_urls = (
+    bing_urls = (
         # Explicit Russian market parameters avoid unrelated regional results.
         f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru&mkt=ru-RU&form=QBLH{freshness_suffix}",
         f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru{freshness_suffix}",
         f"https://www.bing.com/search?format=rss&q={encoded_query}{freshness_suffix}",
-        f"https://html.duckduckgo.com/html/?q={encoded_query}&kl=ru-ru",
     )
+    duckduckgo_url = f"https://html.duckduckgo.com/html/?q={encoded_query}&kl=ru-ru"
+    search_urls = (duckduckgo_url, *bing_urls) if prefer_duckduckgo else (*bing_urls, duckduckgo_url)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -4067,11 +4070,17 @@ async def search_web(
 
 async def collect_deep_search_sources(query: str) -> list[dict[str, str]]:
     """Collect complementary sources for a multi-angle, current web report."""
+    query_terms = [
+        token
+        for token in re.findall(r"[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9-]{1,}", query)
+        if token.casefold() not in SEARCH_STOP_WORDS
+    ]
+    compact_query = " ".join(query_terms[:10]) or query
     plans = [
-        ("Характеристики", f"{query} характеристики сравнение"),
-        ("Цены и магазины", f"{query} цена купить Россия за последний месяц"),
-        ("Обзоры", f"{query} обзор плюсы минусы камера батарея производительность"),
-        ("Новости", f"{query} последние новости обновления скидки за последний месяц"),
+        ("Характеристики", f"{compact_query} характеристики сравнение"),
+        ("Цены и магазины", f"{compact_query} цена купить Россия"),
+        ("Обзоры", f"{compact_query} обзор отзывы плюсы минусы"),
+        ("Новости", f"{compact_query} новости обновления скидки"),
     ]
 
     async def collect_one(label: str, search_query: str) -> list[dict[str, str]]:
@@ -4082,6 +4091,7 @@ async def collect_deep_search_sources(query: str) -> list[dict[str, str]]:
                     search_query,
                     freshness=freshness,
                     min_token_matches=2,
+                    prefer_duckduckgo=True,
                 )
             except ValueError:
                 # A store or a review can mention only one side of a comparison.
@@ -4090,6 +4100,7 @@ async def collect_deep_search_sources(query: str) -> list[dict[str, str]]:
                     search_query,
                     freshness=freshness,
                     min_token_matches=1,
+                    prefer_duckduckgo=True,
                 )
             return [{**item, "category": label} for item in results]
         except Exception as error:
@@ -4103,8 +4114,17 @@ async def collect_deep_search_sources(query: str) -> list[dict[str, str]]:
     for group in grouped_results:
         for item in group:
             url = item.get("url", "").strip()
-            if url and url not in unique_sources:
+            if not url:
+                continue
+            if url not in unique_sources:
                 unique_sources[url] = item
+                continue
+            existing_categories = unique_sources[url].get("category", "").split(" · ")
+            category = item.get("category", "")
+            if category and category not in existing_categories:
+                unique_sources[url]["category"] = " · ".join(
+                    [*existing_categories, category]
+                )
 
     sources = list(unique_sources.values())[:16]
     if not sources:
