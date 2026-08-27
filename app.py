@@ -1538,7 +1538,7 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
         [button("🤖 Модель", "primary"), button("🎭 Роль", "success")],
         [button("⚙️ Настройки", "primary"), button("🗑 Новый диалог", "danger")],
         [button("✨ Генерация", "success"), button("👤 Профиль", "primary")],
-        [button("🔎 Найди в интернете", "primary")],
+        [button("🔎 Найди в интернете", "primary"), button("🧠 Глубокий анализ", "success")],
     ]
     if user_id == ADMIN_ID:
         buttons.append([button("🛡 Админ панель", "danger")])
@@ -3834,15 +3834,20 @@ async def fsm_case_limit(message: Message, state: FSMContext):
 # ─── Internet search ──────────────────────────────────────────────────────────
 
 SEARCH_TRIGGER = "найди в интернете"
+DEEP_SEARCH_TRIGGER = "глубокий анализ"
 SEARCH_MAX_RESULTS = 5
 SEARCH_MAX_QUERY_LENGTH = 300
 SEARCH_RESULT_CHARS = 900
+DEEP_SOURCE_CHARS = 5000
 SEARCH_STOP_WORDS = {
     "а", "без", "бы", "был", "быть", "в", "вам", "вас", "ведь", "во", "вот", "все",
     "вы", "где", "да", "для", "до", "ее", "если", "есть", "же", "за", "и", "из",
     "или", "как", "к", "когда", "кто", "ли", "мне", "мы", "на", "над", "не", "него",
     "нет", "ни", "но", "о", "об", "он", "она", "они", "по", "под", "при", "про",
     "с", "со", "так", "то", "у", "уже", "что", "чем", "это", "эти", "этот", "я",
+    "сравни", "сравнить", "сравнение", "цена", "цены", "стоимость", "характеристики",
+    "характеристика", "последний", "последние", "месяц", "месяца", "месяцев",
+    "обзор", "обзоры", "плюсы", "минусы", "новости", "купить", "россия", "россии",
     "the", "and", "for", "from", "how", "what", "when", "where",
 }
 
@@ -3885,13 +3890,18 @@ def _search_tokens(value: str) -> set[str]:
     }
 
 
-def _is_relevant_search_result(query: str, result: dict[str, str]) -> bool:
+def _is_relevant_search_result(
+    query: str,
+    result: dict[str, str],
+    min_token_matches: int = 1,
+) -> bool:
     """Reject valid-looking provider pages that are unrelated to the query."""
     query_tokens = _search_tokens(query)
     if not query_tokens:
         return True
     result_text = f"{result['title']} {result['snippet']} {result['url']}"
-    return bool(query_tokens & _search_tokens(result_text))
+    matching_tokens = query_tokens & _search_tokens(result_text)
+    return len(matching_tokens) >= min(min_token_matches, len(query_tokens))
 
 
 def _parse_bing_rss(page: str) -> list[dict[str, str]]:
@@ -3997,14 +4007,19 @@ class SearchResultsParser(HTMLParser):
         self.capture_tag = None
 
 
-async def search_web(query: str) -> list[dict[str, str]]:
+async def search_web(
+    query: str,
+    freshness: str | None = None,
+    min_token_matches: int = 1,
+) -> list[dict[str, str]]:
     """Fetch current web results without requiring another API key."""
     encoded_query = url_quote(query, safe="")
+    freshness_suffix = f"&freshness={freshness}" if freshness else ""
     search_urls = (
         # Explicit Russian market parameters avoid unrelated regional results.
-        f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru&mkt=ru-RU&form=QBLH",
-        f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru",
-        f"https://www.bing.com/search?format=rss&q={encoded_query}",
+        f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru&mkt=ru-RU&form=QBLH{freshness_suffix}",
+        f"https://www.bing.com/search?q={encoded_query}&count=10&setlang=ru&cc=ru{freshness_suffix}",
+        f"https://www.bing.com/search?format=rss&q={encoded_query}{freshness_suffix}",
         f"https://html.duckduckgo.com/html/?q={encoded_query}&kl=ru-ru",
     )
     headers = {
@@ -4037,7 +4052,7 @@ async def search_web(query: str) -> list[dict[str, str]]:
                     results = parser.results
                 results = [
                     item for item in results
-                    if _is_relevant_search_result(query, item)
+                    if _is_relevant_search_result(query, item, min_token_matches)
                 ][:SEARCH_MAX_RESULTS]
                 if results:
                     logger.info("Web search returned %s results", len(results))
@@ -4048,6 +4063,163 @@ async def search_web(query: str) -> list[dict[str, str]]:
                 errors.append(str(error))
 
     raise ValueError("Сервисы поиска временно не вернули результаты.")
+
+
+async def collect_deep_search_sources(query: str) -> list[dict[str, str]]:
+    """Collect complementary sources for a multi-angle, current web report."""
+    plans = [
+        ("Характеристики", f"{query} характеристики сравнение"),
+        ("Цены и магазины", f"{query} цена купить Россия за последний месяц"),
+        ("Обзоры", f"{query} обзор плюсы минусы камера батарея производительность"),
+        ("Новости", f"{query} последние новости обновления скидки за последний месяц"),
+    ]
+
+    async def collect_one(label: str, search_query: str) -> list[dict[str, str]]:
+        freshness = "Month" if label in {"Цены и магазины", "Новости"} else None
+        try:
+            try:
+                results = await search_web(
+                    search_query,
+                    freshness=freshness,
+                    min_token_matches=2,
+                )
+            except ValueError:
+                # A store or a review can mention only one side of a comparison.
+                # Keep those relevant leads instead of returning an empty report.
+                results = await search_web(
+                    search_query,
+                    freshness=freshness,
+                    min_token_matches=1,
+                )
+            return [{**item, "category": label} for item in results]
+        except Exception as error:
+            logger.warning("Deep search category %s failed: %s", label, error)
+            return []
+
+    grouped_results = await asyncio.gather(
+        *(collect_one(label, search_query) for label, search_query in plans)
+    )
+    unique_sources: dict[str, dict[str, str]] = {}
+    for group in grouped_results:
+        for item in group:
+            url = item.get("url", "").strip()
+            if url and url not in unique_sources:
+                unique_sources[url] = item
+
+    sources = list(unique_sources.values())[:16]
+    if not sources:
+        raise ValueError("Сервисы поиска временно не вернули результаты.")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.7",
+    }
+
+    async def enrich_source(http: aiohttp.ClientSession, source: dict[str, str]):
+        try:
+            async with http.get(
+                source["url"],
+                timeout=aiohttp.ClientTimeout(total=8),
+                allow_redirects=True,
+            ) as response:
+                if response.status != 200:
+                    return source
+                page = await response.text(errors="ignore")
+            page = re.sub(
+                r"(?is)<(script|style|noscript|svg).*?</\1>",
+                " ",
+                page,
+            )
+            content = _clean_search_text(page)
+            if content:
+                return {**source, "content": content[:DEEP_SOURCE_CHARS]}
+        except Exception as error:
+            logger.info("Deep source fetch skipped for %s: %s", source["url"], error)
+        return source
+
+    async with aiohttp.ClientSession(headers=headers) as http:
+        return await asyncio.gather(
+            *(enrich_source(http, source) for source in sources)
+        )
+
+
+async def summarize_deep_search(query: str, sources: list[dict[str, str]]) -> str:
+    """Turn multi-angle web evidence into a concise, cited comparison report."""
+    source_blocks = []
+    for index, source in enumerate(sources, start=1):
+        details = source.get("content") or source.get("snippet") or "Описание отсутствует."
+        source_blocks.append(
+            f"[{index}] Категория: {source.get('category', 'Поиск')}\n"
+            f"Заголовок: {source['title']}\n"
+            f"Данные: {details[:2400]}\n"
+            f"URL: {source['url']}"
+        )
+
+    request_payload = {
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты проводишь глубокий, но понятный веб-анализ на русском языке. "
+                    "Работай только с данными из переданных источников: не придумывай "
+                    "цифры, цены, даты и характеристики. Если источники расходятся, "
+                    "покажи диапазон и объясни причину. Для цен обязательно укажи "
+                    "валюту, рынок и дату или период. Сформируй готовый отчёт до "
+                    "3800 символов для Telegram без Markdown-таблиц и без HTML. "
+                    "Если запрос — сравнение, используй такой порядок: "
+                    "«🧠 Глубокий анализ», «Короткий вывод», «Сравнение» с компактными "
+                    "строками «Параметр: A — ...; B — ...», «Цены за последний месяц», "
+                    "«Что говорят обзоры», «Новости и изменения», «Итог». "
+                    "Если это не сравнение, адаптируй разделы под тему. "
+                    "Каждое важное утверждение помечай номером источника в формате [1]. "
+                    "В конце добавь «Источники» и перечисли использованные номера с "
+                    "названиями и URL. Отдельно отметь, если данных недостаточно."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Запрос пользователя: {query}\n\n"
+                    "Источники поиска и извлечённые данные:\n"
+                    + "\n\n".join(source_blocks)
+                ),
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1800,
+    }
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    last_error = "Groq не вернул отчёт"
+    async with aiohttp.ClientSession() as http:
+        for model_id in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
+            try:
+                async with http.post(
+                    GROQ_API_URL,
+                    json={**request_payload, "model": model_id},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=45),
+                ) as response:
+                    data = await response.json(content_type=None)
+            except Exception as error:
+                last_error = str(error)
+                logger.warning("Deep report model %s failed: %s", model_id, error)
+                continue
+
+            choices = data.get("choices", [])
+            if choices:
+                report = choices[0].get("message", {}).get("content", "").strip()
+                if report:
+                    return report[:4090]
+            last_error = data.get("error", {}).get("message", last_error)
+            logger.warning("Deep report model %s failed: %s", model_id, last_error)
+
+    raise ValueError(last_error)
 
 
 async def summarize_search_results(query: str, results: list[dict[str, str]]) -> str:
@@ -4125,9 +4297,22 @@ async def summarize_search_results(query: str, results: list[dict[str, str]]) ->
 
 async def start_search(message: Message, state: FSMContext):
     await state.set_state(SearchStates.waiting_query)
+    await state.update_data(search_mode="quick")
     await message.answer(
         "🔎 Напиши запрос, который нужно найти в интернете.\n"
         "Например: <i>какая погода будет в Москве завтра</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def start_deep_search(message: Message, state: FSMContext):
+    await state.set_state(SearchStates.waiting_query)
+    await state.update_data(search_mode="deep")
+    await message.answer(
+        "🧠 Напиши тему для глубокого анализа.\n"
+        "Я проверю характеристики, цены в магазинах, обзоры и новости.\n\n"
+        "Например: <i>Сравни iPhone 15 и Samsung S24 по цене и характеристикам "
+        "за последний месяц</i>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -4157,9 +4342,49 @@ async def run_search(message: Message, state: FSMContext, query: str):
         )
 
 
+async def run_deep_search(message: Message, state: FSMContext, query: str):
+    query = query.strip()
+    await state.clear()
+    if not query:
+        await message.answer("Напиши тему, которую нужно разобрать.")
+        return
+    if len(query) > SEARCH_MAX_QUERY_LENGTH:
+        await message.answer(
+            f"Сделай запрос короче {SEARCH_MAX_QUERY_LENGTH} символов."
+        )
+        return
+
+    status = await message.answer(
+        "🧠 Собираю данные из характеристик, магазинов, обзоров и новостей…"
+    )
+    try:
+        sources = await collect_deep_search_sources(query)
+        await status.edit_text(
+            f"🧠 Нашёл {len(sources)} источников. Проверяю цифры и готовлю отчёт…"
+        )
+        report = await summarize_deep_search(query, sources)
+        await status.edit_text(report, parse_mode=None)
+    except Exception as error:
+        logger.error(
+            "Deep web search error for user %s: %s",
+            message.from_user.id,
+            error,
+            exc_info=True,
+        )
+        await status.edit_text(
+            "❌ Не удалось подготовить глубокий анализ.\n"
+            "Попробуй повторить запрос немного позже или сформулировать его короче."
+        )
+
+
 @router.message(Command("search"))
 async def cmd_search(message: Message, state: FSMContext):
     await start_search(message, state)
+
+
+@router.message(Command("deep"))
+async def cmd_deep_search(message: Message, state: FSMContext):
+    await start_deep_search(message, state)
 
 
 @router.message(F.text == "🔎 Найди в интернете")
@@ -4168,9 +4393,19 @@ async def search_button(message: Message, state: FSMContext):
     await start_search(message, state)
 
 
+@router.message(F.text == "🧠 Глубокий анализ")
+@router.message(F.text == "Глубокий анализ")
+async def deep_search_button(message: Message, state: FSMContext):
+    await start_deep_search(message, state)
+
+
 @router.message(SearchStates.waiting_query, F.text)
 async def fsm_search_query(message: Message, state: FSMContext):
-    await run_search(message, state, message.text or "")
+    data = await state.get_data()
+    if data.get("search_mode") == "deep":
+        await run_deep_search(message, state, message.text or "")
+    else:
+        await run_search(message, state, message.text or "")
 
 
 # ─── Reminders and message handler ────────────────────────────────────────────
@@ -4312,6 +4547,16 @@ async def handle_message(message: Message, state: FSMContext):
         # Also accept the convenient one-message format:
         # "Найди в интернете последние новости о ..."
         await run_search(message, state, message_text[len(SEARCH_TRIGGER):])
+        return
+    if lower_text == DEEP_SEARCH_TRIGGER:
+        await start_deep_search(message, state)
+        return
+    if lower_text.startswith(f"{DEEP_SEARCH_TRIGGER}:"):
+        await run_deep_search(
+            message,
+            state,
+            message_text[len(DEEP_SEARCH_TRIGGER) + 1:],
+        )
         return
     reminder, parse_error = parse_reminder_request(message.text or "")
     if parse_error:
