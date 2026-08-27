@@ -1853,7 +1853,7 @@ async def cmd_help(message: Message):
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
         "✨ <b>Генерация</b> — бесплатные видео и фото по описанию\n"
-        "🔎 <b>Найди в интернете</b> — глубокий разбор с актуальными источниками\n"
+        "🔎 <b>Найди в интернете</b> — поиск актуальной информации\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
         "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
@@ -4356,8 +4356,16 @@ async def start_search(message: Message, state: FSMContext):
     await state.update_data(search_mode="quick")
     await message.answer(
         "🔎 Напиши запрос, который нужно найти в интернете.\n"
-        "Например: <i>какая погода будет в Москве завтра</i>",
+        "Например: <i>какая погода будет в Москве завтра</i>\n\n"
+        "Для подробного разбора сначала нажми кнопку ниже.",
         parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🧠 Глубокий анализ",
+                callback_data="search:deep",
+                style="success",
+            )],
+        ]),
     )
 
 
@@ -4446,7 +4454,20 @@ async def cmd_deep_search(message: Message, state: FSMContext):
 @router.message(F.text == "🔎 Найди в интернете")
 @router.message(F.text == "Найди в интернете")
 async def search_button(message: Message, state: FSMContext):
-    await start_deep_search(message, state)
+    await start_search(message, state)
+
+
+@router.callback_query(F.data == "search:deep")
+async def cb_search_deep(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(search_mode="deep")
+    await callback.message.edit_text(
+        "🧠 Напиши тему для глубокого анализа.\n"
+        "Я проверю характеристики, цены в магазинах, обзоры и новости.\n\n"
+        "Например: <i>Сравни iPhone 15 и Samsung S24 по цене и характеристикам "
+        "за последний месяц</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer("Глубокий анализ включён")
 
 
 @router.message(SearchStates.waiting_query, F.text)
