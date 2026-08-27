@@ -16,7 +16,7 @@ outputType = "console"
 
 [nix]
 channel = "stable-25_05"
-packages = ["ffmpeg", "ffmpeg-full"]
+packages = ["ffmpeg", "ffmpeg-full", "pkg-config"]
 
 [[ports]]
 localPort = 8080
