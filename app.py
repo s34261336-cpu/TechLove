@@ -3,6 +3,7 @@ import re
 import asyncio
 import logging
 import json
+import math
 import tempfile
 import shutil
 import subprocess
@@ -1538,7 +1539,7 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
         [button("🤖 Модель", "primary"), button("🎭 Роль", "success")],
         [button("⚙️ Настройки", "primary"), button("🗑 Новый диалог", "danger")],
         [button("✨ Генерация", "success"), button("👤 Профиль", "primary")],
-        [button("🔎 Найди в интернете", "primary"), button("🧠 Глубокий анализ", "success")],
+        [button("🔎 Найди в интернете", "primary")],
     ]
     if user_id == ADMIN_ID:
         buttons.append([button("🛡 Админ панель", "danger")])
@@ -1852,7 +1853,7 @@ async def cmd_help(message: Message):
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
         "✨ <b>Генерация</b> — бесплатные видео и фото по описанию\n"
-        "🔎 <b>Найди в интернете</b> — поиск актуальной информации с коротким ответом\n"
+        "🔎 <b>Найди в интернете</b> — глубокий разбор с актуальными источниками\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
         "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
@@ -3156,7 +3157,7 @@ def _get_ffmpeg_binary() -> str:
 
 
 def _render_video_pyav(image_bytes: bytes) -> bytes:
-    """Encode a short MP4 through PyAV without requiring an FFmpeg executable."""
+    """Encode a short moving MP4 through PyAV without an FFmpeg executable."""
     from io import BytesIO
 
     import av
@@ -3168,18 +3169,44 @@ def _render_video_pyav(image_bytes: bytes) -> bytes:
         source.close()
 
     image = source_frame.to_ndarray(format="rgb24")
+    image_height, image_width = image.shape[:2]
+    if image_height < 2 or image_width < 2:
+        raise ValueError("Исходное изображение слишком маленькое для видео")
+
+    video_width = 720
+    video_height = 720
+    fps = 30
+    frame_count = 180
     output_buffer = BytesIO()
     output = av.open(output_buffer, mode="w", format="mp4")
     try:
-        stream = output.add_stream("mpeg4", rate=25)
-        stream.width = 720
-        stream.height = 720
+        stream = output.add_stream(
+            "libx264",
+            rate=fps,
+            options={"crf": "18", "preset": "medium", "tune": "stillimage"},
+        )
+        stream.width = video_width
+        stream.height = video_height
         stream.pix_fmt = "yuv420p"
-        for frame_number in range(150):
-            video_frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+        for frame_number in range(frame_count):
+            progress = frame_number / max(frame_count - 1, 1)
+            zoom = 1.0 + (0.055 * progress) + (0.012 * math.sin(progress * 2 * math.pi))
+            crop_width = max(2, min(image_width, int(image_width / zoom)))
+            crop_height = max(2, min(image_height, int(image_height / zoom)))
+            available_x = image_width - crop_width
+            available_y = image_height - crop_height
+            center_x = available_x / 2 + available_x * 0.24 * math.sin(progress * 2 * math.pi)
+            center_y = available_y / 2 + available_y * 0.18 * math.cos(progress * 2 * math.pi)
+            crop_x = max(0, min(available_x, int(center_x - crop_width / 2)))
+            crop_y = max(0, min(available_y, int(center_y - crop_height / 2)))
+            moving_image = image[
+                crop_y:crop_y + crop_height,
+                crop_x:crop_x + crop_width,
+            ]
+            video_frame = av.VideoFrame.from_ndarray(moving_image, format="rgb24")
             video_frame = video_frame.reformat(
-                width=720,
-                height=720,
+                width=video_width,
+                height=video_height,
                 format="yuv420p",
             )
             video_frame.pts = frame_number
@@ -3193,15 +3220,7 @@ def _render_video_pyav(image_bytes: bytes) -> bytes:
 
 
 def _render_video_sync(image_bytes: bytes) -> bytes:
-    """Render a short MP4 in a normal thread for hosts with limited asyncio support."""
-    try:
-        video_bytes = _render_video_pyav(image_bytes)
-        if video_bytes:
-            logger.info("Video encoded through PyAV")
-            return video_bytes
-    except Exception as pyav_error:
-        logger.warning("PyAV video encoding failed; trying FFmpeg: %s", pyav_error)
-
+    """Render a moving, high-quality MP4 in a normal thread."""
     temp_dir = tempfile.mkdtemp(prefix="zeno-video-")
     image_path = os.path.join(temp_dir, "source.png")
     video_path = os.path.join(temp_dir, "result.mp4")
@@ -3214,17 +3233,17 @@ def _render_video_sync(image_bytes: bytes) -> bytes:
                 ffmpeg_binary, "-y", "-loglevel", "error",
                 "-loop", "1", "-i", image_path,
                 "-vf",
-                "scale=720:720:force_original_aspect_ratio=decrease,"
-                "unsharp=5:5:0.7:5:5:0.0,"
-                "pad=720:720:(ow-iw)/2:(oh-ih)/2,"
+                "scale=720:720:force_original_aspect_ratio=decrease:flags=lanczos,"
+                "pad=720:720:(ow-iw)/2:(oh-ih)/2:color=black,"
                 "zoompan="
-                "z='1.04+0.04*sin(on/35)':"
-                "x='iw/2-(iw/zoom/2)+30*sin(on/24)':"
-                "y='ih/2-(ih/zoom/2)+22*cos(on/29)':"
-                "d=150:s=720x720:fps=25,"
+                "z='1.0+0.055*(on/179)+0.012*sin(on/28)':"
+                "x='iw/2-(iw/zoom/2)+22*sin(on/60)':"
+                "y='ih/2-(ih/zoom/2)+18*cos(on/72)':"
+                "d=180:s=720x720:fps=30,"
                 "format=yuv420p",
-                "-t", "6", "-an", "-c:v", "libx264", "-preset", "veryfast",
-                "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                "-t", "6", "-an", "-c:v", "libx264", "-preset", "medium",
+                "-crf", "18", "-profile:v", "high", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
                 video_path,
             ]
             result = subprocess.run(
@@ -3241,6 +3260,17 @@ def _render_video_sync(image_bytes: bytes) -> bytes:
             logger.warning("FFmpeg binary failed (%s): %s", ffmpeg_binary, last_error)
             if os.path.exists(video_path):
                 os.remove(video_path)
+
+        # PyAV is a dependency of the bot and remains a moving fallback when
+        # neither the system nor the bundled FFmpeg can encode H.264.
+        try:
+            video_bytes = _render_video_pyav(image_bytes)
+            if video_bytes:
+                logger.info("Video encoded through animated PyAV fallback")
+                return video_bytes
+        except Exception as pyav_error:
+            logger.warning("Animated PyAV video encoding failed: %s", pyav_error)
+            last_error = f"{last_error}; PyAV: {pyav_error}"
         raise ValueError(f"Не удалось собрать видео: {last_error}")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -3298,6 +3328,12 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             image_prompt = await enhance_image_prompt(prompt, is_hd=is_hd)
             if not image_prompt:
                 raise ValueError("empty enhanced prompt")
+            if is_video:
+                image_prompt = (
+                    f"{image_prompt}. Prepare the composition for a smooth 6-second "
+                    "camera animation: clear foreground, middle ground and background, "
+                    "strong depth, stable subject framing, no tiny fragile details."
+                )
         except Exception as prompt_error:
             logger.warning(f"Prompt enhancement failed, using local enhancer: {prompt_error}")
             image_prompt = fallback_image_prompt(prompt, is_hd=is_hd)
@@ -4410,12 +4446,6 @@ async def cmd_deep_search(message: Message, state: FSMContext):
 @router.message(F.text == "🔎 Найди в интернете")
 @router.message(F.text == "Найди в интернете")
 async def search_button(message: Message, state: FSMContext):
-    await start_search(message, state)
-
-
-@router.message(F.text == "🧠 Глубокий анализ")
-@router.message(F.text == "Глубокий анализ")
-async def deep_search_button(message: Message, state: FSMContext):
     await start_deep_search(message, state)
 
 
