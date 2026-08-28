@@ -383,10 +383,20 @@ MODELS = {
         "emoji_html": pe("5314536790874230525", "🛡️"),
         "emoji_id": "5314536790874230525",
     },
-    "seekai_gpt_5_5": {
-        "name": "SeekAI · GPT-5.5",
-        "model_id": "gpt-5-5",
-        "description": "Сильная универсальная модель SeekAI для сложных задач и диалога.",
+    "seekai_deepseek_v4_flash": {
+        "name": "SeekAI · DeepSeek V4 Flash",
+        "model_id": "deepseek-v4-flash",
+        "description": "Быстрая модель SeekAI для анализа, кода и рассуждений.",
+        "emoji": "🔭",
+        "emoji_html": "🔭",
+        "emoji_id": "5776233299424843260",
+        "provider": "seekai",
+        "max_tokens": 4096,
+    },
+    "seekai_gpt_5_6_luna": {
+        "name": "SeekAI · GPT-5.6 Luna",
+        "model_id": "gpt-5-6-luna",
+        "description": "Быстрая универсальная модель SeekAI для повседневных задач.",
         "emoji": "🧭",
         "emoji_html": "🧭",
         "emoji_id": "5926783847453692661",
@@ -396,20 +406,10 @@ MODELS = {
     "seekai_gemini_3_flash": {
         "name": "SeekAI · Gemini 3 Flash",
         "model_id": "gemini-3-flash",
-        "description": "Быстрая модель SeekAI для повседневных запросов.",
+        "description": "Быстрая модель SeekAI для коротких и повседневных запросов.",
         "emoji": "⚡",
         "emoji_html": "⚡️",
         "emoji_id": "5323761960829862762",
-        "provider": "seekai",
-        "max_tokens": 4096,
-    },
-    "seekai_deepseek_v4_flash": {
-        "name": "SeekAI · DeepSeek V4 Flash",
-        "model_id": "deepseek-v4-flash",
-        "description": "Быстрая модель SeekAI для анализа, кода и рассуждений.",
-        "emoji": "🔭",
-        "emoji_html": "🔭",
-        "emoji_id": "5776233299424843260",
         "provider": "seekai",
         "max_tokens": 4096,
     },
@@ -583,6 +583,10 @@ MODELS = {
         "provider": "mistral",
         "max_tokens": 4096,
     },
+}
+
+MODEL_ALIASES = {
+    "seekai_gpt_5_5": "seekai_gpt_5_6_luna",
 }
 
 SYSTEM_PROMPTS = {
@@ -1557,6 +1561,11 @@ def get_session(user_id: int) -> dict:
         }
     else:
         # Ensure older sessions have the style key
+        old_model = user_sessions[user_id].get("model")
+        if old_model in MODEL_ALIASES:
+            user_sessions[user_id]["model"] = MODEL_ALIASES[old_model]
+        elif user_sessions[user_id].get("model") not in MODELS:
+            user_sessions[user_id]["model"] = "gpt_oss_120b"
         user_sessions[user_id].setdefault("style", "calm")
         user_sessions[user_id].setdefault("models_filter", "all")
     return user_sessions[user_id]
@@ -1588,9 +1597,9 @@ MODEL_STYLES = {
     "gpt_oss_safeguard": "success",
     "sn_deepseek_v3_1": "danger",
     "sn_deepseek_v3_2": "danger",
-    "seekai_gpt_5_5": "danger",
-    "seekai_gemini_3_flash": "success",
     "seekai_deepseek_v4_flash": "primary",
+    "seekai_gpt_5_6_luna": "danger",
+    "seekai_gemini_3_flash": "success",
 
     "sn_gemma4_31b": "success",
     "sn_gpt_oss_120b": "danger",
