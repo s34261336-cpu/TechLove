@@ -28,7 +28,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject, FSInputFile,
-    BufferedInputFile,
+    BufferedInputFile, ErrorEvent,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -388,8 +388,8 @@ MODELS = {
         "model_id": "gpt-5-5",
         "description": "Сильная универсальная модель SeekAI для сложных задач и диалога.",
         "emoji": "🧭",
-        "emoji_html": pe("5314536790874230525", "🧭"),
-        "emoji_id": "5314536790874230525",
+        "emoji_html": "🧭",
+        "emoji_id": "5926783847453692661",
         "provider": "seekai",
         "max_tokens": 4096,
     },
@@ -398,7 +398,7 @@ MODELS = {
         "model_id": "gemini-3-flash",
         "description": "Быстрая модель SeekAI для повседневных запросов.",
         "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_html": "⚡️",
         "emoji_id": "5323761960829862762",
         "provider": "seekai",
         "max_tokens": 4096,
@@ -408,7 +408,7 @@ MODELS = {
         "model_id": "deepseek-v4-flash",
         "description": "Быстрая модель SeekAI для анализа, кода и рассуждений.",
         "emoji": "🔭",
-        "emoji_html": pe("5776233299424843260", "🔭"),
+        "emoji_html": "🔭",
         "emoji_id": "5776233299424843260",
         "provider": "seekai",
         "max_tokens": 4096,
@@ -5345,8 +5345,9 @@ async def fsm_prize_weight(message: Message, state: FSMContext):
 # ─── Global error handler ─────────────────────────────────────────────────────
 
 @router.errors()
-async def global_error_handler(event, exception: Exception):
+async def global_error_handler(event: ErrorEvent):
     """Silently ignore 'message is not modified' and similar Telegram edit errors."""
+    exception = event.exception
     if isinstance(exception, TelegramBadRequest):
         text = str(exception).lower()
         if any(phrase in text for phrase in (
