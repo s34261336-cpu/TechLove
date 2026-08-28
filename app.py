@@ -48,6 +48,9 @@ SUPABASE_FACTS_URL = f"{SUPABASE_URL}/rest/v1/user_facts" if SUPABASE_URL else "
 SUPABASE_STATE_URL = f"{SUPABASE_URL}/rest/v1/bot_state" if SUPABASE_URL else ""
 SUPABASE_SESSIONS_URL = f"{SUPABASE_URL}/rest/v1/user_sessions" if SUPABASE_URL else ""
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+SEEKAI_API_KEY = os.environ.get("SEEKAI_API_KEY", "")
+SEEKAI_BASE_URL = os.environ.get("SEEKAI_BASE_URL", "https://seekai.cc").rstrip("/")
+SEEKAI_API_URL = f"{SEEKAI_BASE_URL}/v1/chat/completions"
 SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/chat/completions"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
@@ -379,6 +382,36 @@ MODELS = {
         "emoji": "🛡️",
         "emoji_html": pe("5314536790874230525", "🛡️"),
         "emoji_id": "5314536790874230525",
+    },
+    "seekai_gpt_5_5": {
+        "name": "SeekAI · GPT-5.5",
+        "model_id": "gpt-5-5",
+        "description": "Сильная универсальная модель SeekAI для сложных задач и диалога.",
+        "emoji": "🧭",
+        "emoji_html": pe("5314536790874230525", "🧭"),
+        "emoji_id": "5314536790874230525",
+        "provider": "seekai",
+        "max_tokens": 4096,
+    },
+    "seekai_gemini_3_flash": {
+        "name": "SeekAI · Gemini 3 Flash",
+        "model_id": "gemini-3-flash",
+        "description": "Быстрая модель SeekAI для повседневных запросов.",
+        "emoji": "⚡",
+        "emoji_html": pe("5323761960829862762", "⚡️"),
+        "emoji_id": "5323761960829862762",
+        "provider": "seekai",
+        "max_tokens": 4096,
+    },
+    "seekai_deepseek_v4_flash": {
+        "name": "SeekAI · DeepSeek V4 Flash",
+        "model_id": "deepseek-v4-flash",
+        "description": "Быстрая модель SeekAI для анализа, кода и рассуждений.",
+        "emoji": "🔭",
+        "emoji_html": pe("5776233299424843260", "🔭"),
+        "emoji_id": "5776233299424843260",
+        "provider": "seekai",
+        "max_tokens": 4096,
     },
     "sn_deepseek_v3_1": {
         "name": "DeepSeek V3.1",
@@ -1555,6 +1588,9 @@ MODEL_STYLES = {
     "gpt_oss_safeguard": "success",
     "sn_deepseek_v3_1": "danger",
     "sn_deepseek_v3_2": "danger",
+    "seekai_gpt_5_5": "danger",
+    "seekai_gemini_3_flash": "success",
+    "seekai_deepseek_v4_flash": "primary",
 
     "sn_gemma4_31b": "success",
     "sn_gpt_oss_120b": "danger",
@@ -1581,6 +1617,8 @@ def is_model_available(model: dict) -> bool:
         return bool(OPENROUTER_API_KEY)
     if provider == "mistral":
         return bool(MISTRAL_API_KEY)
+    if provider == "seekai":
+        return bool(SEEKAI_API_KEY)
     return True
 
 
@@ -1600,6 +1638,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
     # ── Models grouped by provider ────────────────────────────────────────────
     PROVIDER_GROUPS = [
         ("groq",       "⚡️ GROQ"),
+        ("seekai",     "🧭 SEEKAI"),
         ("sambanova",  "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
         ("mistral",    "🇫🇷 MISTRAL"),
@@ -1714,6 +1753,7 @@ def admin_models_keyboard() -> InlineKeyboardMarkup:
     """Group model controls by provider and show status plus current price."""
     provider_groups = [
         ("groq", "⚡ GROQ"),
+        ("seekai", "🧭 SEEKAI"),
         ("sambanova", "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
         ("mistral", "🇫🇷 MISTRAL"),
@@ -3541,7 +3581,7 @@ async def cb_img_home(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ─── Groq API ─────────────────────────────────────────────────────────────────
+# ─── OpenAI-compatible AI APIs ────────────────────────────────────────────────
 
 async def call_ai(session: dict, user_message: str, user_id: int | None = None) -> str:
     model_cfg = MODELS[session["model"]]
@@ -3585,7 +3625,10 @@ async def call_ai(session: dict, user_message: str, user_id: int | None = None) 
     if model_cfg.get("no_thinking"):
         payload["thinking"] = {"type": "disabled"}
     provider = model_cfg.get("provider", "groq")
-    if provider == "sambanova":
+    if provider == "seekai":
+        api_url = SEEKAI_API_URL
+        api_key = SEEKAI_API_KEY
+    elif provider == "sambanova":
         api_url = SAMBANOVA_API_URL
         api_key = SAMBANOVA_API_KEY
     elif provider == "openrouter":
@@ -5352,7 +5395,7 @@ async def main():
 
     try:
         await set_commands(bot)
-        logger.info("Бот запущен на Groq!")
+        logger.info("Бот запущен; доступны Groq и SeekAI.")
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
         reminder_task.cancel()

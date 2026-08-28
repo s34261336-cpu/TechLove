@@ -6,13 +6,15 @@
 
 - Рабочий процесс **TechLove Bot** запускает `python app.py`.
 - Данные пользователей, моделей и кейсов хранятся в JSON-файлах в корне проекта.
-- Для работы нужны секреты `BOT_TOKEN` и `GROQ_API_KEY`.
+- Для работы нужны секреты `BOT_TOKEN` и `GROQ_API_KEY`. Для моделей SeekAI также нужен
+  секрет `SEEKAI_API_KEY`; адрес API задаётся через `SEEKAI_BASE_URL` и по умолчанию
+  использует `https://seekai.cc`.
 
 ## Стек
 
 - Python 3.12
 - aiogram 3
-- Groq API
+- OpenAI-совместимые AI API: Groq и SeekAI
 - aiohttp
 - JSON-файлы для хранения состояния
 
