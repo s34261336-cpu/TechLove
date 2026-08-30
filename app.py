@@ -430,6 +430,13 @@ PE_GIFT = pe("5985472565508838112", "🎁")
 PE_IDEA = pe("5258216851472654189", "💡")
 PE_SPEECH = pe("6032653721853234759", "🗣")
 PE_TRASH = pe("5258130763148172425", "🗑")
+PE_TICKET = pe("5377599075237502153", "🎟")
+PE_VIDEO = pe("5375464961822695044", "🎬")
+PE_IMAGE = pe("5375074927252621134", "🖼")
+PE_USER = pe("5920344347152224466", "👤")
+PE_ROBOT = pe("5931415565955503486", "🤖")
+PE_COIN = pe("5379600444098093058", "🪙")
+PE_DATE = pe("5967412305338568701", "📅")
 
 EMOJI_SETTINGS_ID = "5258096772776991776"
 EMOJI_TEMPERATURE_ID = "5470049770997292425"
@@ -440,6 +447,13 @@ EMOJI_SPEECH_ID = "6032653721853234759"
 EMOJI_TRASH_ID = "5258130763148172425"
 EMOJI_SEARCH_ID = "5874960879434338403"
 EMOJI_SPARKLES_ID = "5890925363067886150"
+EMOJI_TICKET_ID = "5377599075237502153"
+EMOJI_VIDEO_ID = "5375464961822695044"
+EMOJI_IMAGE_ID = "5375074927252621134"
+EMOJI_USER_ID = "5920344347152224466"
+EMOJI_ROBOT_ID = "5931415565955503486"
+EMOJI_COIN_ID = "5379600444098093058"
+EMOJI_DATE_ID = "5967412305338568701"
 
 
 # Emoji IDs shown on model buttons depending on restriction state
@@ -817,7 +831,7 @@ def detect_mood(text: str) -> str:
 
 
 ROLES = {
-    "default":    {"name": "Ассистент",    "emoji": "🤖",  "emoji_html": pe("5258093637450866522", "🤖"),  "emoji_id": "5258093637450866522"},
+    "default":    {"name": "Ассистент",    "emoji": PE_ROBOT,  "emoji_html": PE_ROBOT,  "emoji_id": EMOJI_ROBOT_ID},
     "coder":      {"name": "Программист",  "emoji": "👨‍💻", "emoji_html": pe("5444965061749644170", "👨‍💻"), "emoji_id": "5444965061749644170"},
     "writer":     {"name": "Писатель",     "emoji": "✍️",  "emoji_html": pe("5879841310902324730", "✍️"),  "emoji_id": "5879841310902324730"},
     "analyst":    {"name": "Аналитик",     "emoji": "📊",  "emoji_html": pe("5870921681735781843", "📊"),  "emoji_id": "5870921681735781843"},
@@ -1410,7 +1424,11 @@ def reset_prize_weights():
 def pick_prize() -> dict:
     weights = get_prize_weights()
     chosen = random.choices(CASE_PRIZES, weights=weights, k=1)[0]
-    return {"type": chosen[1], "value": chosen[2], "name": chosen[3], "emoji": chosen[4]}
+    premium_emoji = {
+        "🎟": PE_TICKET,
+        "🪙": PE_COIN,
+    }.get(chosen[4], chosen[4])
+    return {"type": chosen[1], "value": chosen[2], "name": chosen[3], "emoji": premium_emoji}
 
 def apply_prize(user_id: int, prize: dict):
     """Apply the won prize to the user's profile."""
@@ -1512,11 +1530,11 @@ def img_gen_info_text(user_id: int) -> str:
     gens = get_user_free_gens(user_id)
     photo_price = get_img_gen_price()
     video_price = get_video_gen_price()
-    photo_label = "бесплатно" if photo_price == 0 else f"{photo_price} 🎟"
-    video_label = "бесплатно" if video_price == 0 else f"{video_price} 🎟"
+    photo_label = "бесплатно" if photo_price == 0 else f"{photo_price} {PE_TICKET}"
+    video_label = "бесплатно" if video_price == 0 else f"{video_price} {PE_TICKET}"
     return (
-        f"\n\n🎟 <b>Стоимость:</b> фото — {photo_label} · видео — {video_label}"
-        f"\nВаш баланс: <b>{gens} 🎟</b>"
+        f"\n\n{PE_TICKET} <b>Стоимость:</b> фото — {photo_label} · видео — {video_label}"
+        f"\nВаш баланс: <b>{gens} {PE_TICKET}</b>"
     )
 
 
@@ -1724,11 +1742,11 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
         return KeyboardButton(text=text, style=style, icon_custom_emoji_id=emoji_id)
 
     buttons = [
-        [button("🤖 Модель", "primary"), button("Роль", "success", EMOJI_ROLE_ID)],
+        [button("Модель", "primary", EMOJI_ROBOT_ID), button("Роль", "success", EMOJI_ROLE_ID)],
         [button("Настройки", "primary", EMOJI_SETTINGS_ID),
          button("Новый диалог", "danger", EMOJI_TRASH_ID)],
         [button("Генерация", "success", EMOJI_SPARKLES_ID),
-         button("👤 Профиль", "primary")],
+         button("Профиль", "primary", EMOJI_USER_ID)],
         [button("Найди в интернете", "primary", EMOJI_SEARCH_ID)],
     ]
     if user_id == ADMIN_ID:
@@ -1783,11 +1801,16 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
     # ── Filter row at the top ──────────────────────────────────────────────────
     FILTER_STYLES = {"all": "primary", "free": "success", "paid": "danger"}
     filter_row = []
-    for key, label in [("all", "📋 Все"), ("free", "🆓 Бесплатные"), ("paid", "🪙 Платные")]:
+    for key, label, emoji_id in [
+        ("all", "📋 Все", None),
+        ("free", "🆓 Бесплатные", None),
+        ("paid", "Платные", EMOJI_COIN_ID),
+    ]:
         active = filter_mode == key
         btn = InlineKeyboardButton(
             text=f"✅ {label}" if active else label,
             callback_data=f"mfilter:{key}",
+            icon_custom_emoji_id=emoji_id,
         )
         btn.style = FILTER_STYLES[key]
         filter_row.append(btn)
@@ -1825,7 +1848,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
                 continue
 
             check = "✅ " if key == current else ""
-            price_tag = f" · 🪙{price}" if is_paid else ""
+            price_tag = f" · {price}" if is_paid else ""
             btn = InlineKeyboardButton(
                 text=f"{check}{model['name']}{price_tag}",
                 callback_data=f"model:{key}",
@@ -1898,14 +1921,15 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     maint_style = "danger" if is_maintenance() else "success"
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("📢 Рассылка", "admin:broadcast"), _btn("🪙 Выдать ZenoToken", "admin:give", "success")],
-        [_btn("🎟 Выдать генерации", "admin:give_generations", "success")],
+        [_btn("📢 Рассылка", "admin:broadcast"), _btn("Выдать ZenoToken", "admin:give", "success", EMOJI_COIN_ID)],
+        [_btn("Выдать генерации", "admin:give_generations", "success", EMOJI_TICKET_ID)],
         [_btn("📊 Статистика", "admin:stats"), _btn("👥 Пользователи", "admin:users")],
         [_btn("🔍 Найти пользователя", "admin:find")],
-        [_btn("🤖 Управление моделями", "admin:models")],
+        [_btn("Управление моделями", "admin:models", emoji_id=EMOJI_ROBOT_ID)],
         [_btn("💰 Цены моделей", "admin:prices")],
-        [_btn("🖼 Цена фото", "admin:imgprice"), _btn("🎬 Цена видео", "admin:videoprice")],
-        [_btn("🖼 Фото блоков", "admin:media")],
+        [_btn("Цена фото", "admin:imgprice", emoji_id=EMOJI_IMAGE_ID),
+         _btn("Цена видео", "admin:videoprice", emoji_id=EMOJI_VIDEO_ID)],
+        [_btn("Фото блоков", "admin:media", emoji_id=EMOJI_IMAGE_ID)],
         [_btn("Управление кейсами", "admin:cases", emoji_id=EMOJI_GIFT_ID)],
         [_btn(test_label, "admin:testmode", test_style)],
         [_btn(maint_label, "admin:maintenance", maint_style)],
@@ -1915,7 +1939,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
 def admin_media_text() -> str:
     configured = sum(1 for key in MEDIA_BLOCKS if get_media_file_id(key))
     return (
-        "🖼 <b>Фотографии разделов</b>\n\n"
+        f"{PE_IMAGE} <b>Фотографии разделов</b>\n\n"
         "Здесь можно заменить изображение для любого блока бота. "
         "Отправьте фото после выбора нужного раздела.\n\n"
         f"Настроено: <b>{configured}/{len(MEDIA_BLOCKS)}</b>\n"
@@ -1970,7 +1994,7 @@ def admin_models_keyboard() -> InlineKeyboardMarkup:
                 "🔴" if restriction else "🟢"
             )
             price = get_model_price(key)
-            price_label = "🆓" if price == 0 else f"🪙{price}"
+            price_label = "🆓" if price == 0 else f"{price}"
             group_buttons.append(InlineKeyboardButton(
                 text=f"{status} {model['name']} · {price_label}",
                 callback_data=f"mctrl:info:{key}",
@@ -2094,14 +2118,14 @@ async def cmd_help(message: Message):
     text = (
         "📖 <b>Как пользоваться:</b>\n\n"
         "Просто пишите сообщение — бот отвечает с учётом истории разговора.\n\n"
-        f"{pe('5258093637450866522', '🤖')} <b>Модели:</b>\n{models_text}\n\n"
+        f"{PE_ROBOT} <b>Модели:</b>\n{models_text}\n\n"
         f"{PE_ROLE} <b>Роли:</b>\n{roles_text}\n\n"
         f"{PE_SETTINGS} <b>Настройки</b> — регулировка температуры ответа\n"
         f"{PE_TRASH} <b>Новый диалог</b> — сбросить историю\n"
         f"{PE_SPARKLES} <b>Генерация</b> — бесплатные видео и фото по описанию\n"
         f"{PE_SEARCH} <b>Найди в интернете</b> — поиск актуальной информации\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
-        "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
+        f"{PE_USER} <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
         f"{PE_GIFT} <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
         "📝 <b>Команды:</b>\n"
         "/start — главное меню\n"
@@ -2134,11 +2158,12 @@ async def cmd_help(message: Message):
 # ─── /model ───────────────────────────────────────────────────────────────────
 
 @router.message(Command("model"))
+@router.message(F.text == "Модель")
 @router.message(F.text == "🤖 Модель")
 async def cmd_model(message: Message):
     session = get_session(message.from_user.id)
     filter_mode = session.get("models_filter", "all")
-    text = f"{pe('5258093637450866522', '🤖')} <b>Выберите модель ИИ:</b>"
+    text = f"{PE_ROBOT} <b>Выберите модель ИИ:</b>"
     keyboard = models_keyboard(session["model"], filter_mode)
     if not await send_configured_photo(message, "models", text, keyboard):
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
@@ -2183,7 +2208,7 @@ async def cmd_status(message: Message):
     role = ROLES[session["role"]]
     text = (
         f"{PE_SETTINGS} <b>Текущие настройки:</b>\n\n"
-        f"{pe('5258093637450866522', '🤖')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
+        f"{PE_ROBOT} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
         f"{PE_ROLE} Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
         f"{PE_TEMPERATURE} Температура: <b>{session['temperature']:.1f}</b>\n"
         f"{PE_CHAT} Сообщений в истории: <b>{len(session['history'])}</b>"
@@ -2203,6 +2228,7 @@ async def cmd_status(message: Message):
 # ─── /profile ─────────────────────────────────────────────────────────────────
 
 @router.message(Command("profile"))
+@router.message(F.text == "Профиль")
 @router.message(F.text == "👤 Профиль")
 async def cmd_profile(message: Message):
     user = message.from_user
@@ -2219,23 +2245,23 @@ async def cmd_profile(message: Message):
         vip_line = f"\n👑 <b>VIP-статус активен</b> — истекает через {h}ч {m}м"
     free_gens = profile.get("free_gens", 0)
     text = (
-        f"{'👑' if vip else '👤'} <b>Профиль</b>{vip_line}\n\n"
-        f"👤 Имя: <b>{profile['first_name']}</b>\n"
+        f"{'👑' if vip else PE_USER} <b>Профиль</b>{vip_line}\n\n"
+        f"{PE_USER} Имя: <b>{profile['first_name']}</b>\n"
         f"🔗 Username: <b>{username_str}</b>\n"
         f"🆔 ID: <code>{profile['user_id']}</code>\n\n"
-        f"🪙 <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n"
-        f"🎟 <b>Генерации: {free_gens}</b>\n\n"
+        f"{PE_COIN} <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n"
+        f"{PE_TICKET} <b>Генерации: {free_gens}</b>\n\n"
         f"{PE_CHAT} Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
-        f"📅 Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
+        f"{PE_DATE} Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
         f"🕐 Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
-        f"🤖 Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
+        f"{PE_ROBOT} Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
         f"{PE_ROLE} Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
     )
     if vip:
         text += (
             "\n\n👑 <b>VIP-привилегии:</b>\n"
             "• 🎨 Генерации изображений бесплатны\n"
-            "• 🤖 Все платные модели бесплатны\n"
+            f"• {PE_ROBOT} Все платные модели бесплатны\n"
             "• ⚡ Антиспам вдвое мягче"
         )
     if not await send_configured_photo(message, "profile", text):
@@ -2284,7 +2310,7 @@ async def cb_admin_give(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AdminStates.waiting_give_user)
     await callback.message.edit_text(
-        "🪙 <b>Выдача ZenoToken</b>\n\nВведите ID пользователя или @username:",
+        f"{PE_COIN} <b>Выдача ZenoToken</b>\n\nВведите ID пользователя или @username:",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
     )
@@ -2298,7 +2324,7 @@ async def cb_admin_give_generations(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AdminStates.waiting_give_generation_user)
     await callback.message.edit_text(
-        "🎟 <b>Выдача генераций</b>\n\n"
+        f"{PE_TICKET} <b>Выдача генераций</b>\n\n"
         "Введите ID пользователя или @username.\n"
         "Генерации используются для фото и видео.",
         parse_mode=ParseMode.HTML,
@@ -2317,14 +2343,14 @@ async def cb_admin_stats(callback: CallbackQuery):
     total_msgs = sum(u.get("messages_count", 0) for u in users)
     top_users = sorted(users, key=lambda u: u.get("zenotoken", 0), reverse=True)[:5]
     top_text = "\n".join(
-        f"{i+1}. <b>{u['first_name']}</b> — 🪙 {u.get('zenotoken', 0)}"
+        f"{i+1}. <b>{u['first_name']}</b> — {PE_COIN} {u.get('zenotoken', 0)}"
         for i, u in enumerate(top_users)
     )
     text = (
         f"📊 <b>Статистика бота</b>\n\n"
         f"👥 Всего пользователей: <b>{len(users)}</b>\n"
         f"{PE_CHAT} Всего сообщений: <b>{total_msgs}</b>\n"
-        f"🪙 Всего ZenoToken выдано: <b>{total_tokens}</b>\n\n"
+        f"{PE_COIN} Всего ZenoToken выдано: <b>{total_tokens}</b>\n\n"
         f"🏆 <b>Топ по ZenoToken:</b>\n{top_text or '—'}"
     )
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2350,7 +2376,7 @@ async def cb_admin_users(callback: CallbackQuery):
         uname = f"@{u['username']}" if u.get("username") else f"id{u['user_id']}"
         lines.append(
             f"• <b>{u['first_name']}</b> ({uname})\n"
-            f"  🪙 {u.get('zenotoken', 0)} | {PE_CHAT} {u.get('messages_count', 0)} | 🕐 {u.get('last_seen', '—')}"
+            f"  {PE_COIN} {u.get('zenotoken', 0)} | {PE_CHAT} {u.get('messages_count', 0)} | 🕐 {u.get('last_seen', '—')}"
         )
     text = f"👥 <b>Последние {len(recent)} пользователей:</b>\n\n" + "\n\n".join(lines)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2425,7 +2451,7 @@ async def cb_admin_media_set(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_media_photo)
     await state.update_data(media_block_key=block_key)
     await callback.message.edit_text(
-        f"🖼 <b>Фото: {block['label']}</b>\n\n"
+        f"{PE_IMAGE} <b>Фото: {block['label']}</b>\n\n"
         f"Этот снимок будет показываться в разделе «{block['label']}» "
         f"({block['description']}).\n\n"
         "Отправьте одно фото следующим сообщением.",
@@ -2506,7 +2532,7 @@ def admin_prices_keyboard() -> InlineKeyboardMarkup:
             if model.get("provider", "groq") != provider_key:
                 continue
             price = get_model_price(key)
-            price_label = "🆓 Бесплатно" if price == 0 else f"🪙 {price}"
+            price_label = "Бесплатно" if price == 0 else f"{price} ZenoToken"
             group_buttons.append(InlineKeyboardButton(
                 text=f"{model['name']} — {price_label}",
                 callback_data=f"aprice:pick:{key}",
@@ -2546,7 +2572,7 @@ async def cb_aprice_pick(callback: CallbackQuery, state: FSMContext):
     await state.update_data(price_model_key=model_key)
     await callback.message.edit_text(
         f"💰 <b>Цена за запрос — {model['name']}</b>\n\n"
-        f"Текущая цена: <b>{'🆓 Бесплатно' if current_price == 0 else f'🪙 {current_price}'}</b>\n\n"
+        f"Текущая цена: <b>{'Бесплатно' if current_price == 0 else f'{PE_COIN} {current_price}'}</b>\n\n"
         f"Введите новую цену (целое число, 0 = бесплатно):",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
@@ -2573,7 +2599,7 @@ async def fsm_set_price(message: Message, state: FSMContext):
     model = MODELS[model_key]
     set_model_price(model_key, price)
     await state.clear()
-    price_str = "🆓 Бесплатно" if price == 0 else f"🪙 {price} ZenoToken за запрос"
+    price_str = "Бесплатно" if price == 0 else f"{PE_COIN} {price} ZenoToken за запрос"
     await message.answer(
         f"✅ <b>Цена обновлена!</b>\n\n"
         f"Модель: <b>{model['name']}</b>\n"
@@ -2592,10 +2618,10 @@ async def cb_admin_imgprice(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     current = get_img_gen_price()
-    price_str = "🆓 Бесплатно" if current == 0 else f"{current} 🎟 за генерацию"
+    price_str = "Бесплатно" if current == 0 else f"{current} {PE_TICKET} за генерацию"
     await state.set_state(AdminStates.waiting_img_gen_price)
     await callback.message.edit_text(
-        f"🎟 <b>Цена за генерацию изображения</b>\n\n"
+        f"{PE_TICKET} <b>Цена за генерацию изображения</b>\n\n"
         f"Текущая цена: <b>{price_str}</b>\n\n"
         f"Введите новую цену в генерациях (0 = бесплатно для всех):",
         parse_mode=ParseMode.HTML,
@@ -2617,7 +2643,7 @@ async def fsm_img_gen_price(message: Message, state: FSMContext):
         return
     set_img_gen_price(price)
     await state.clear()
-    price_str = "🆓 Бесплатно для всех" if price == 0 else f"{price} 🎟 за генерацию"
+    price_str = "Бесплатно для всех" if price == 0 else f"{price} {PE_TICKET} за генерацию"
     await message.answer(
         f"✅ <b>Цена обновлена!</b>\n\nГенерация изображения: <b>{price_str}</b>",
         parse_mode=ParseMode.HTML,
@@ -2633,10 +2659,10 @@ async def cb_admin_video_price(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     current = get_video_gen_price()
-    price_str = "🆓 Бесплатно" if current == 0 else f"{current} 🎟 за генерацию"
+    price_str = "Бесплатно" if current == 0 else f"{current} {PE_TICKET} за генерацию"
     await state.set_state(AdminStates.waiting_video_gen_price)
     await callback.message.edit_text(
-        "🎬 <b>Цена за генерацию видео</b>\n\n"
+        f"{PE_VIDEO} <b>Цена за генерацию видео</b>\n\n"
         f"Текущая цена: <b>{price_str}</b>\n\n"
         "Введите новую цену в генерациях (целое число, 0 = бесплатно для всех):",
         parse_mode=ParseMode.HTML,
@@ -2661,7 +2687,7 @@ async def fsm_video_gen_price(message: Message, state: FSMContext):
         return
     set_video_gen_price(price)
     await state.clear()
-    price_str = "🆓 Бесплатно для всех" if price == 0 else f"{price} 🎟 за генерацию"
+    price_str = "Бесплатно для всех" if price == 0 else f"{price} {PE_TICKET} за генерацию"
     await message.answer(
         f"✅ <b>Цена обновлена!</b>\n\nГенерация видео: <b>{price_str}</b>",
         parse_mode=ParseMode.HTML,
@@ -2780,7 +2806,7 @@ async def cb_admin_models(callback: CallbackQuery):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     await callback.message.edit_text(
-        "🤖 <b>Управление моделями</b>\n\n"
+        f"{PE_ROBOT} <b>Управление моделями</b>\n\n"
         "🟢 — доступна  |  🔴 — отключена  |  ⏳ — временно отключена\n\n"
         "Выберите модель для управления:",
         parse_mode=ParseMode.HTML,
@@ -3050,17 +3076,25 @@ async def fsm_give_user(message: Message, state: FSMContext):
         uname = f"@{found['username']}" if found.get("username") else "—"
         text = (
             f"🔍 <b>Профиль пользователя</b>\n\n"
-            f"👤 Имя: <b>{found['first_name']}</b>\n"
+            f"{PE_USER} Имя: <b>{found['first_name']}</b>\n"
             f"🔗 Username: <b>{uname}</b>\n"
             f"🆔 ID: <code>{found['user_id']}</code>\n"
-            f"🪙 ZenoToken: <b>{found.get('zenotoken', 0)}</b>\n"
+            f"{PE_COIN} ZenoToken: <b>{found.get('zenotoken', 0)}</b>\n"
             f"{PE_CHAT} Сообщений: <b>{found.get('messages_count', 0)}</b>\n"
-            f"📅 Регистрация: <b>{found.get('joined_at', '—')}</b>\n"
+            f"{PE_DATE} Регистрация: <b>{found.get('joined_at', '—')}</b>\n"
             f"🕐 Последняя активность: <b>{found.get('last_seen', '—')}</b>"
         )
         give_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🪙 Выдать токены", callback_data=f"admin:give_to:{found['user_id']}")],
-            [InlineKeyboardButton(text="🎟 Выдать генерации", callback_data=f"admin:give_gens_to:{found['user_id']}")],
+            [InlineKeyboardButton(
+                text="Выдать токены",
+                callback_data=f"admin:give_to:{found['user_id']}",
+                icon_custom_emoji_id=EMOJI_COIN_ID,
+            )],
+            [InlineKeyboardButton(
+                text="Выдать генерации",
+                callback_data=f"admin:give_gens_to:{found['user_id']}",
+                icon_custom_emoji_id=EMOJI_TICKET_ID,
+            )],
             [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
         ])
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=give_kb)
@@ -3069,7 +3103,7 @@ async def fsm_give_user(message: Message, state: FSMContext):
     await state.set_state(AdminStates.waiting_give_amount)
     await state.update_data(target_user_id=found["user_id"], target_name=found["first_name"])
     await message.answer(
-        f"🪙 Выдача токенов для <b>{found['first_name']}</b> (текущий баланс: {found.get('zenotoken', 0)})\n\n"
+        f"{PE_COIN} Выдача токенов для <b>{found['first_name']}</b> (текущий баланс: {found.get('zenotoken', 0)})\n\n"
         f"Введите количество ZenoToken (можно отрицательное для снятия):",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
@@ -3107,7 +3141,7 @@ async def fsm_give_generation_user(message: Message, state: FSMContext):
         generation_target_name=found.get("first_name", "Пользователь"),
     )
     await message.answer(
-        f"🎟 <b>Выдача генераций для {html_escape(found.get('first_name', 'пользователя'))}</b>\n\n"
+        f"{PE_TICKET} <b>Выдача генераций для {html_escape(found.get('first_name', 'пользователя'))}</b>\n\n"
         f"Текущий баланс: <b>{found.get('free_gens', 0)} генераций</b>\n\n"
         "Введите количество генераций.\n"
         "Можно указать отрицательное число, чтобы забрать генерации.",
@@ -3144,7 +3178,7 @@ async def fsm_give_generation_amount(message: Message, state: FSMContext, bot: B
         await bot.send_message(
             chat_id=target_id,
             text=(
-                f"🎟 <b>Изменён баланс генераций</b>\n\n"
+                f"{PE_TICKET} <b>Изменён баланс генераций</b>\n\n"
                 f"{sign}{amount} генераций\n"
                 f"Новый баланс: <b>{new_balance}</b>"
             ),
@@ -3155,14 +3189,18 @@ async def fsm_give_generation_amount(message: Message, state: FSMContext, bot: B
         notified = "⚠️ Не удалось уведомить пользователя."
 
     await message.answer(
-        f"🎟 <b>Готово!</b>\n\n"
+        f"{PE_TICKET} <b>Готово!</b>\n\n"
         f"Пользователь: <b>{html_escape(target_name)}</b>\n"
         f"Изменение: <b>{sign}{amount}</b> генераций\n"
         f"Новый баланс: <b>{new_balance}</b>\n\n"
         f"{notified}",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎟 Выдать ещё", callback_data="admin:give_generations")],
+            [InlineKeyboardButton(
+                text="Выдать ещё",
+                callback_data="admin:give_generations",
+                icon_custom_emoji_id=EMOJI_TICKET_ID,
+            )],
             [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
         ]),
     )
@@ -3183,7 +3221,7 @@ async def cb_give_to(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_give_amount)
     await state.update_data(target_user_id=uid, target_name=found["first_name"])
     await callback.message.edit_text(
-        f"🪙 Выдача токенов для <b>{found['first_name']}</b> (баланс: {found.get('zenotoken', 0)})\n\n"
+        f"{PE_COIN} Выдача токенов для <b>{found['first_name']}</b> (баланс: {found.get('zenotoken', 0)})\n\n"
         f"Введите количество ZenoToken:",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
@@ -3207,7 +3245,7 @@ async def cb_give_generations_to(callback: CallbackQuery, state: FSMContext):
         generation_target_name=found.get("first_name", "Пользователь"),
     )
     await callback.message.edit_text(
-        f"🎟 <b>Выдача генераций для {html_escape(found.get('first_name', 'пользователя'))}</b>\n\n"
+        f"{PE_TICKET} <b>Выдача генераций для {html_escape(found.get('first_name', 'пользователя'))}</b>\n\n"
         f"Текущий баланс: <b>{found.get('free_gens', 0)} генераций</b>\n\n"
         "Введите количество генераций (можно отрицательное число):",
         parse_mode=ParseMode.HTML,
@@ -3249,7 +3287,7 @@ async def fsm_give_amount(message: Message, state: FSMContext, bot: Bot):
         await bot.send_message(
             chat_id=target_id,
             text=(
-                f"🪙 <b>Вам начислены ZenoToken!</b>\n\n"
+                f"{PE_COIN} <b>Вам начислены ZenoToken!</b>\n\n"
                 f"{sign}{amount} ZenoToken\n"
                 f"Новый баланс: <b>{new_balance} ZenoToken</b>"
             ),
@@ -3260,7 +3298,7 @@ async def fsm_give_amount(message: Message, state: FSMContext, bot: Bot):
         notified = "⚠️ Не удалось уведомить пользователя."
 
     await message.answer(
-        f"🪙 <b>Готово!</b>\n\n"
+        f"{PE_COIN} <b>Готово!</b>\n\n"
         f"Пользователь: <b>{target_name}</b>\n"
         f"Начислено: <b>{'+' if amount >= 0 else ''}{amount}</b> ZenoToken\n"
         f"Новый баланс: <b>{new_balance}</b> ZenoToken\n\n"
@@ -3362,7 +3400,7 @@ async def cb_model(callback: CallbackQuery):
     filter_mode = session.get("models_filter", "all")
 
     price = get_model_price(model_key)
-    price_line = f"\n\n🪙 <b>Стоимость запроса: {price} ZenoToken</b>" if price > 0 else ""
+    price_line = f"\n\n{PE_COIN} <b>Стоимость запроса: {price} ZenoToken</b>" if price > 0 else ""
 
     try:
         await callback.message.edit_text(
@@ -3419,7 +3457,7 @@ async def cb_open_model(callback: CallbackQuery):
     session = get_session(callback.from_user.id)
     filter_mode = session.get("models_filter", "all")
     await callback.message.answer(
-        f"{pe('5258093637450866522', '🤖')} <b>Выберите модель ИИ:</b>",
+        f"{PE_ROBOT} <b>Выберите модель ИИ:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=models_keyboard(session["model"], filter_mode)
     )
@@ -3444,16 +3482,26 @@ IMG_WELCOME_TEXT = (
 async def cmd_img(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖼 Фото", callback_data="img:mode:photo", style="primary"),
-         InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
+        [InlineKeyboardButton(
+            text="Фото",
+            callback_data="img:mode:photo",
+            style="primary",
+            icon_custom_emoji_id=EMOJI_IMAGE_ID,
+        ),
+         InlineKeyboardButton(
+             text="Видео",
+             callback_data="img:mode:video",
+             style="success",
+             icon_custom_emoji_id=EMOJI_VIDEO_ID,
+         )],
     ])
     text = (
         f"{PE_SPARKLES} <b>Генерация по описанию</b>\n\n"
         "Выберите, что создать:\n"
-        "🖼 <b>Фото</b> — изображение по вашему описанию.\n"
-        "🎬 <b>Видео</b> — короткий клип с плавной анимацией.\n\n"
-        f"🖼 Фото: {('🆓 Бесплатно' if get_img_gen_price() == 0 else f'{get_img_gen_price()} 🎟 за генерацию')}\n"
-        f"🎬 Видео: {('🆓 Бесплатно' if get_video_gen_price() == 0 else f'{get_video_gen_price()} 🎟 за генерацию')}"
+        f"{PE_IMAGE} <b>Фото</b> — изображение по вашему описанию.\n"
+        f"{PE_VIDEO} <b>Видео</b> — короткий клип с плавной анимацией.\n\n"
+        f"{PE_IMAGE} Фото: {('🆓 Бесплатно' if get_img_gen_price() == 0 else f'{get_img_gen_price()} {PE_TICKET} за генерацию')}\n"
+        f"{PE_VIDEO} Видео: {('🆓 Бесплатно' if get_video_gen_price() == 0 else f'{get_video_gen_price()} {PE_TICKET} за генерацию')}"
         + img_gen_info_text(message.from_user.id)
     )
     if not await send_configured_photo(message, "generation", text, kb):
@@ -3507,9 +3555,12 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
     except TelegramBadRequest:
         pass
 
+    is_video_prompt = data.get("media_type") == "video"
     kb_rows = [[InlineKeyboardButton(
-        text=("🎬 Создать видео" if data.get("media_type") == "video" else "🖼 Создать фото"),
-        callback_data="img:generate", style="success"
+        text=("Создать видео" if is_video_prompt else "Создать фото"),
+        callback_data="img:generate",
+        style="success",
+        icon_custom_emoji_id=EMOJI_VIDEO_ID if is_video_prompt else EMOJI_IMAGE_ID,
     )]]
     if data.get("media_type") != "video":
         kb_rows.append([InlineKeyboardButton(
@@ -3800,7 +3851,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         gens = get_user_free_gens(user_id)
         if gens < price:
             await callback.answer(
-                f"❌ Недостаточно генераций! Нужно {price} 🎟, у тебя {gens}. Открой кейс — там можно выиграть генерации.",
+                f"❌ Недостаточно генераций! Нужно {price} генераций, у тебя {gens}. Открой кейс — там можно выиграть генерации.",
                 show_alert=True,
             )
             return
@@ -3811,7 +3862,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         charged, remaining = deduct_user_free_gens(user_id, price)
         if not charged:
             await callback.message.answer(
-                f"❌ Недостаточно генераций! Нужно {price} 🎟, у тебя {remaining}.",
+                f"❌ Недостаточно генераций! Нужно {price} генераций, у тебя {remaining}.",
             )
             return
         generation_charged = True
@@ -3840,7 +3891,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         logger.info("Image prompt enhanced for %s generation", quality_label)
 
         await callback.message.edit_text(
-            f"{'🎬' if is_video else '🎨'} <b>Готовлю медиа через {quality_label}...</b>\n\n"
+            f"{PE_VIDEO if is_video else '🎨'} <b>Готовлю медиа через {quality_label}...</b>\n\n"
             f"<i>{html_escape(prompt)}</i>",
             parse_mode=ParseMode.HTML
         )
@@ -3947,13 +3998,13 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
         if is_video:
             await callback.message.edit_text(
-                f"🎬 <b>Анимирую видео...</b>\n\n<i>{html_escape(prompt)}</i>",
+                f"{PE_VIDEO} <b>Анимирую видео...</b>\n\n<i>{html_escape(prompt)}</i>",
                 parse_mode=ParseMode.HTML,
             )
             video_bytes = await render_free_video(img_bytes)
             await callback.message.answer_video(
                 BufferedInputFile(video_bytes, filename="video.mp4"),
-                caption=f"🎬 <i>{html_escape(prompt)}</i>\n\n{img_gen_info_text(user_id).strip()}",
+                caption=f"{PE_VIDEO} <i>{html_escape(prompt)}</i>\n\n{img_gen_info_text(user_id).strip()}",
                 parse_mode=ParseMode.HTML,
             )
         else:
@@ -3967,8 +4018,10 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=("🎬 Создать ещё видео" if is_video else "🖼 Создать ещё фото"),
-                callback_data="img:generate", style="success"
+                text=("Создать ещё видео" if is_video else "Создать ещё фото"),
+                callback_data="img:generate",
+                style="success",
+                icon_custom_emoji_id=EMOJI_VIDEO_ID if is_video else EMOJI_IMAGE_ID,
             )],
             [InlineKeyboardButton(
                 text="⚡ HD — максимальное качество",
@@ -3978,7 +4031,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt", style="primary")],
         ])
         await callback.message.edit_text(
-            f"{'🎬 Видео готово' if is_video else IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n"
+        f"{f'{PE_VIDEO} Видео готово' if is_video else IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n"
             f"<b>Последний промт:</b>\n<i>{html_escape(prompt)}</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_menu
@@ -4030,12 +4083,22 @@ async def cb_img_home(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     text = (
         f"{PE_SPARKLES} <b>Генерация по описанию</b>\n\n"
-        "🖼 Фото — по текущей цене генерации.\n"
-        "🎬 Видео — бесплатно."
+        f"{PE_IMAGE} Фото — по текущей цене генерации.\n"
+        f"{PE_VIDEO} Видео — бесплатно."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖼 Фото", callback_data="img:mode:photo", style="primary"),
-         InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
+        [InlineKeyboardButton(
+            text="Фото",
+            callback_data="img:mode:photo",
+            style="primary",
+            icon_custom_emoji_id=EMOJI_IMAGE_ID,
+        ),
+         InlineKeyboardButton(
+             text="Видео",
+             callback_data="img:mode:video",
+             style="success",
+             icon_custom_emoji_id=EMOJI_VIDEO_ID,
+         )],
     ])
     await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
     media_id = get_media_file_id("generation")
@@ -4374,7 +4437,7 @@ async def fsm_case_limit(message: Message, state: FSMContext):
         f"✅ <b>Кейс создан!</b>\n\n"
         f"{PE_GIFT} Название: <b>{case['name']}</b>\n"
         f"📦 Количество: <b>{case['total_count']}</b>\n"
-        f"👤 Лимит на пользователя: <b>{case['per_user_limit']}</b>",
+        f"{PE_USER} Лимит на пользователя: <b>{case['per_user_limit']}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cases_keyboard(),
     )
@@ -4999,8 +5062,9 @@ async def list_reminders(message: Message):
     reminders = get_user_reminders(message.from_user.id)
     if not reminders:
         await message.answer(
-            "📅 У вас пока нет активных напоминаний.\n\n"
-            "Пример: «Поставь напоминание завтра в 09:30 позвонить маме»"
+            f"{PE_DATE} У вас пока нет активных напоминаний.\n\n"
+            "Пример: «Поставь напоминание завтра в 09:30 позвонить маме»",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -5010,7 +5074,7 @@ async def list_reminders(message: Message):
         for reminder in reminders
     ]
     await message.answer(
-        "📅 <b>Ваши напоминания (время МСК):</b>\n\n"
+        f"{PE_DATE} <b>Ваши напоминания (время МСК):</b>\n\n"
         + "\n".join(lines)
         + "\n\nУдалить: <code>/cancel_reminder ID</code>",
         parse_mode=ParseMode.HTML,
@@ -5192,7 +5256,7 @@ async def process_text_message(message: Message, text: str):
                 f"⚠️ <b>{model['name']}</b> сейчас недоступна.\n\n"
                 f"{time_note}\n"
         f"{PE_PIN} Причина: <i>{r['reason']}</i>\n\n"
-                f"Выберите другую модель через кнопку 🤖 Модель.",
+                f"Выберите другую модель через кнопку «Модель».",
                 parse_mode=ParseMode.HTML,
             )
             return
@@ -5204,22 +5268,26 @@ async def process_text_message(message: Message, text: str):
         balance = profile.get("zenotoken", 0)
         if balance < token_price:
             await message.answer(
-                f"🪙 <b>Недостаточно ZenoToken!</b>\n\n"
-                f"Модель <b>{model['name']}</b> стоит <b>{token_price} 🪙</b> за запрос.\n"
-                f"Ваш баланс: <b>{balance} 🪙</b>\n\n"
+                f"{PE_COIN} <b>Недостаточно ZenoToken!</b>\n\n"
+                f"Модель <b>{model['name']}</b> стоит <b>{token_price} {PE_COIN}</b> за запрос.\n"
+                f"Ваш баланс: <b>{balance} {PE_COIN}</b>\n\n"
                 f"Выберите бесплатную модель или обратитесь к администратору для пополнения баланса.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🤖 Сменить модель", callback_data="open:model")]
+                    [InlineKeyboardButton(
+                        text="Сменить модель",
+                        callback_data="open:model",
+                        icon_custom_emoji_id=EMOJI_ROBOT_ID,
+                    )]
                 ])
             )
             return
         success, new_balance = deduct_tokens(user_id, token_price)
         if not success:
             await message.answer(
-                f"🪙 <b>Недостаточно ZenoToken!</b>\n\n"
-                f"Нужно <b>{token_price} 🪙</b>, у вас <b>{balance} 🪙</b>.\n\n"
-                f"Выберите бесплатную модель через кнопку 🤖 Модель.",
+                f"{PE_COIN} <b>Недостаточно ZenoToken!</b>\n\n"
+                f"Нужно <b>{token_price} {PE_COIN}</b>, у вас <b>{balance} {PE_COIN}</b>.\n\n"
+                f"Выберите бесплатную модель через кнопку «Модель».",
                 parse_mode=ParseMode.HTML,
             )
             return
@@ -5268,7 +5336,7 @@ async def process_text_message(message: Message, text: str):
             f"⏳ <b>Модель {e} перегружена.</b>\n\n"
             f"Бесплатный лимит запросов временно исчерпан у провайдера. "
             f"Подождите минуту и попробуйте снова, или выберите другую модель.\n\n"
-            f"🤖 /model — сменить модель",
+            f"{PE_ROBOT} /model — сменить модель",
             parse_mode=ParseMode.HTML
         )
     except Exception as e:
@@ -5346,9 +5414,14 @@ def prizes_keyboard() -> InlineKeyboardMarkup:
     for i, prize in enumerate(CASE_PRIZES):
         w = weights[i]
         pct = round(w / total * 100, 1) if total > 0 else 0
+        prize_emoji_id = {
+            "🎟": EMOJI_TICKET_ID,
+            "🪙": EMOJI_COIN_ID,
+        }.get(prize[4])
         btn = InlineKeyboardButton(
-            text=f"{prize[4]} {prize[3]}  —  вес {w}  ({pct}%)",
+            text=f"{prize[3]}  —  вес {w}  ({pct}%)",
             callback_data=f"aprize:edit:{i}",
+            icon_custom_emoji_id=prize_emoji_id,
         )
         btn.style = "primary"
         rows.append([btn])
@@ -5368,7 +5441,7 @@ def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("✏️ Изменить название", f"acase:rename:{case_id}")],
         [_btn("🔢 Изменить количество", f"acase:settotal:{case_id}")],
-        [_btn("👤 Изменить лимит на пользователя", f"acase:setlimit:{case_id}")],
+        [_btn("Изменить лимит на пользователя", f"acase:setlimit:{case_id}", emoji_id=EMOJI_USER_ID)],
         [_btn("Удалить кейс", f"acase:delete:{case_id}", "danger", EMOJI_TRASH_ID)],
         [_btn("◀️ К кейсам", "admin:cases")],
     ])
@@ -5392,8 +5465,8 @@ def _slot_frame(row: str, stage: str) -> str:
 
 PRIZE_REEL_EMOJI = {
     "nothing":    {0: "💨"},
-    "zenotoken": {10: "🪙", 25: "🪙", 50: "💎", 100: "💎"},
-    "free_gens":  {3: "🎟", 5: "🎟", 10: "🌟"},
+    "zenotoken": {10: PE_COIN, 25: PE_COIN, 50: "💎", 100: "💎"},
+    "free_gens":  {3: PE_TICKET, 5: PE_TICKET, 10: "🌟"},
     "vip":        {1: "👑"},
 }
 
@@ -5433,7 +5506,7 @@ async def cb_cases_list(callback: CallbackQuery, bot: Bot):
     lines += [
         "━━━━━━━━━━━━━━━━━━━",
         "",
-        "🪙 ZenoToken  •  🎟 Генерации  •  👑 VIP",
+        f"{PE_COIN} ZenoToken  •  {PE_TICKET} Генерации  •  👑 VIP",
         "",
         f"{PE_DOWN} Выбери кейс и испытай удачу:",
     ]
@@ -5488,8 +5561,8 @@ async def cb_case_view(callback: CallbackQuery, bot: Bot):
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"{PE_IDEA} <b>Возможные призы:</b>\n"
         f"  💨  Пусто (часто)\n"
-        f"  🪙  10 · 25 · 50 · 100 ZenoToken\n"
-        f"  🎟  3 · 5 · 10 генераций изображений\n"
+        f"  {PE_COIN}  10 · 25 · 50 · 100 ZenoToken\n"
+        f"  {PE_TICKET}  3 · 5 · 10 генераций изображений\n"
         f"  👑  VIP-статус на 24 часа (редко)\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
         f"Нажми <b>🎰 Открыть кейс</b> и испытай удачу!"
@@ -5595,10 +5668,10 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
 
     if prize["type"] == "zenotoken":
         detail = "Начислено прямо на твой баланс."
-        balance_line = f"💰 Баланс ZenoToken: <b>{profile.get('zenotoken', 0)} 🪙</b>"
+        balance_line = f"💰 Баланс ZenoToken: <b>{profile.get('zenotoken', 0)} {PE_COIN}</b>"
     elif prize["type"] == "free_gens":
         detail = "Добавлено к балансу генераций изображений."
-        balance_line = f"🎟 Генерации: <b>{profile.get('free_gens', 0)}</b>"
+        balance_line = f"{PE_TICKET} Генерации: <b>{profile.get('free_gens', 0)}</b>"
     else:
         rem = get_vip_remaining(user_id)
         h, m = rem // 3600, (rem % 3600) // 60
@@ -5669,7 +5742,7 @@ async def cb_acase_edit(callback: CallbackQuery):
     await callback.message.edit_text(
         f"{PE_GIFT} <b>{c['name']}</b>\n\n"
         f"📦 Всего: {c['total_count']} | Открыто: {c['opened_count']} | Осталось: {remaining}\n"
-        f"👤 Лимит на пользователя: {c['per_user_limit']}\n\n"
+        f"{PE_USER} Лимит на пользователя: {c['per_user_limit']}\n\n"
         f"Выберите действие:",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_case_actions_keyboard(case_id),
@@ -5741,7 +5814,7 @@ async def cb_acase_setlimit(callback: CallbackQuery, state: FSMContext):
     await state.update_data(edit_case_id=case_id, edit_case_field="per_user_limit")
     await state.set_state(CaseStates.waiting_case_limit)
     await callback.message.edit_text(
-        "👤 Введите новый <b>лимит открытий на пользователя</b>:",
+        f"{PE_USER} Введите новый <b>лимит открытий на пользователя</b>:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}", style="danger")]
