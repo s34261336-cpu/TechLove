@@ -423,6 +423,23 @@ PE_PIN = pe("5796440171364749940", "📌")
 PE_ROCKET = pe("5258332798409783582", "🚀")
 PE_SPARKLES = pe("5890925363067886150", "✨")
 PE_DOWN = pe("5778147300060696808", "👇")
+PE_SETTINGS = pe("5258096772776991776", "⚙️")
+PE_TEMPERATURE = pe("5470049770997292425", "🌡")
+PE_ROLE = pe("6032625495328165724", "🎭")
+PE_GIFT = pe("5985472565508838112", "🎁")
+PE_IDEA = pe("5258216851472654189", "💡")
+PE_SPEECH = pe("6032653721853234759", "🗣")
+PE_TRASH = pe("5258130763148172425", "🗑")
+
+EMOJI_SETTINGS_ID = "5258096772776991776"
+EMOJI_TEMPERATURE_ID = "5470049770997292425"
+EMOJI_ROLE_ID = "6032625495328165724"
+EMOJI_GIFT_ID = "5985472565508838112"
+EMOJI_IDEA_ID = "5258216851472654189"
+EMOJI_SPEECH_ID = "6032653721853234759"
+EMOJI_TRASH_ID = "5258130763148172425"
+EMOJI_SEARCH_ID = "5874960879434338403"
+EMOJI_SPARKLES_ID = "5890925363067886150"
 
 
 # Emoji IDs shown on model buttons depending on restriction state
@@ -653,9 +670,9 @@ MODELS = {
         "name": "OpenRouter Free Router",
         "model_id": "openrouter/free",
         "description": "Автоматически выбирает актуальную бесплатную модель OpenRouter.",
-        "emoji": "🎁",
-        "emoji_html": pe("5314536790874230525", "🎁"),
-        "emoji_id": "5314536790874230525",
+        "emoji": PE_GIFT,
+        "emoji_html": PE_GIFT,
+        "emoji_id": EMOJI_GIFT_ID,
         "provider": "openrouter",
     },
     "or_gpt_oss_20b": {
@@ -1703,14 +1720,16 @@ def get_session(user_id: int) -> dict:
 # ─── Keyboards ───────────────────────────────────────────────────────────────
 
 def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
-    def button(text: str, style: str) -> KeyboardButton:
-        return KeyboardButton(text=text, style=style)
+    def button(text: str, style: str, emoji_id: str | None = None) -> KeyboardButton:
+        return KeyboardButton(text=text, style=style, icon_custom_emoji_id=emoji_id)
 
     buttons = [
-        [button("🤖 Модель", "primary"), button("🎭 Роль", "success")],
-        [button("⚙️ Настройки", "primary"), button("🗑 Новый диалог", "danger")],
-        [button("✨ Генерация", "success"), button("👤 Профиль", "primary")],
-        [button("🔎 Найди в интернете", "primary")],
+        [button("🤖 Модель", "primary"), button("Роль", "success", EMOJI_ROLE_ID)],
+        [button("Настройки", "primary", EMOJI_SETTINGS_ID),
+         button("Новый диалог", "danger", EMOJI_TRASH_ID)],
+        [button("Генерация", "success", EMOJI_SPARKLES_ID),
+         button("👤 Профиль", "primary")],
+        [button("Найди в интернете", "primary", EMOJI_SEARCH_ID)],
     ]
     if user_id == ADMIN_ID:
         buttons.append([button("🛡 Админ панель", "danger")])
@@ -1855,7 +1874,11 @@ def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
     btn_close = InlineKeyboardButton(text="✅ Закрыть", callback_data="settings:close")
     btn_close.style = "primary"
     buttons = [
-        [InlineKeyboardButton(text=f"🌡 Температура: {temp:.1f}  (точно ←→ креативно)", callback_data="noop")],
+        [InlineKeyboardButton(
+            text=f"Температура: {temp:.1f}  (точно ←→ креативно)",
+            callback_data="noop",
+            icon_custom_emoji_id=EMOJI_TEMPERATURE_ID,
+        )],
         [btn_down, btn_val, btn_up],
         [btn_close],
     ]
@@ -1866,8 +1889,8 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     test_label = "🧪 Тест как пользователь: 🟢 ВКЛ" if admin_test_mode else "🧪 Тест как пользователь: ⭕ ВЫКЛ"
     maint_label = "🔧 Тех. работы: 🟢 ВКЛ" if is_maintenance() else "🔧 Тех. работы: ⭕ ВЫКЛ"
 
-    def _btn(text, cb, style="primary"):
-        b = InlineKeyboardButton(text=text, callback_data=cb)
+    def _btn(text, cb, style="primary", emoji_id=None):
+        b = InlineKeyboardButton(text=text, callback_data=cb, icon_custom_emoji_id=emoji_id)
         b.style = style
         return b
 
@@ -1883,7 +1906,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [_btn("💰 Цены моделей", "admin:prices")],
         [_btn("🖼 Цена фото", "admin:imgprice"), _btn("🎬 Цена видео", "admin:videoprice")],
         [_btn("🖼 Фото блоков", "admin:media")],
-        [_btn("🎁 Управление кейсами", "admin:cases")],
+        [_btn("Управление кейсами", "admin:cases", emoji_id=EMOJI_GIFT_ID)],
         [_btn(test_label, "admin:testmode", test_style)],
         [_btn(maint_label, "admin:maintenance", maint_style)],
     ])
@@ -1913,8 +1936,9 @@ def admin_media_keyboard() -> InlineKeyboardMarkup:
         row = [set_button]
         if configured:
             delete_button = InlineKeyboardButton(
-                text="🗑",
+                text="Удалить",
                 callback_data=f"admin:media:delete:{key}",
+                icon_custom_emoji_id=EMOJI_TRASH_ID,
             )
             delete_button.style = "danger"
             row.append(delete_button)
@@ -1998,9 +2022,17 @@ def styles_keyboard(current: str) -> InlineKeyboardMarkup:
 
 
 def start_inline_keyboard() -> InlineKeyboardMarkup:
-    btn_style = InlineKeyboardButton(text="🗣 Стиль общения", callback_data="style:menu")
+    btn_style = InlineKeyboardButton(
+        text="Стиль общения",
+        callback_data="style:menu",
+        icon_custom_emoji_id=EMOJI_SPEECH_ID,
+    )
     btn_style.style = "primary"
-    btn_cases = InlineKeyboardButton(text="🎁 Кейсы", callback_data="cases:list")
+    btn_cases = InlineKeyboardButton(
+        text="Кейсы",
+        callback_data="cases:list",
+        icon_custom_emoji_id=EMOJI_GIFT_ID,
+    )
     btn_cases.style = "success"
     return InlineKeyboardMarkup(inline_keyboard=[[btn_style, btn_cases]])
 
@@ -2026,13 +2058,13 @@ async def cmd_start(message: Message):
         f"{PE_CHAT} Задавай вопросы и веди диалог с учётом истории\n"
         f"{PE_SEARCH} Ищи актуальную информацию в интернете\n"
         f"{PE_SPARKLES} Создавай изображения и работай с фотографиями\n"
-        f"🎭 Выбирай роль и стиль общения под себя\n\n"
+        f"{PE_ROLE} Выбирай роль и стиль общения под себя\n\n"
         f"{PE_ROCKET} <b>Начать просто:</b> напиши сообщение ниже или выбери нужный раздел в меню.\n\n"
         f"{PE_PIN} <b>Твои текущие настройки:</b>\n"
         f"• Модель: {model['emoji_html']} {model['name']}\n"
         f"• Роль: {role['emoji_html']} {role['name']}\n"
         f"• Стиль: {style['emoji']} {style['name']}\n\n"
-        f"💡 Можно начать с команды: <b>«Помоги мне с…»</b>"
+        f"{PE_IDEA} Можно начать с команды: <b>«Помоги мне с…»</b>"
     )
     photo = get_media_file_id("main_menu") or FSInputFile(DEFAULT_MAIN_IMAGE)
     await message.answer_photo(
@@ -2063,14 +2095,14 @@ async def cmd_help(message: Message):
         "📖 <b>Как пользоваться:</b>\n\n"
         "Просто пишите сообщение — бот отвечает с учётом истории разговора.\n\n"
         f"{pe('5258093637450866522', '🤖')} <b>Модели:</b>\n{models_text}\n\n"
-        f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
-        "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
-        "🗑 <b>Новый диалог</b> — сбросить историю\n"
+        f"{PE_ROLE} <b>Роли:</b>\n{roles_text}\n\n"
+        f"{PE_SETTINGS} <b>Настройки</b> — регулировка температуры ответа\n"
+        f"{PE_TRASH} <b>Новый диалог</b> — сбросить историю\n"
         f"{PE_SPARKLES} <b>Генерация</b> — бесплатные видео и фото по описанию\n"
         f"{PE_SEARCH} <b>Найди в интернете</b> — поиск актуальной информации\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
-        "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
+        f"{PE_GIFT} <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
         "📝 <b>Команды:</b>\n"
         "/start — главное меню\n"
         "/new — новый диалог\n"
@@ -2115,10 +2147,11 @@ async def cmd_model(message: Message):
 # ─── /role ────────────────────────────────────────────────────────────────────
 
 @router.message(Command("role"))
+@router.message(F.text == "Роль")
 @router.message(F.text == "🎭 Роль")
 async def cmd_role(message: Message):
     session = get_session(message.from_user.id)
-    text = f"{pe('6032625495328165724', '🎭')} <b>Выберите роль ассистента:</b>"
+    text = f"{PE_ROLE} <b>Выберите роль ассистента:</b>"
     keyboard = roles_keyboard(session["role"])
     if not await send_configured_photo(message, "roles", text, keyboard):
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
@@ -2127,12 +2160,13 @@ async def cmd_role(message: Message):
 # ─── /new ─────────────────────────────────────────────────────────────────────
 
 @router.message(Command("new"))
+@router.message(F.text == "Новый диалог")
 @router.message(F.text == "🗑 Новый диалог")
 async def cmd_new(message: Message):
     session = get_session(message.from_user.id)
     session["history"] = []
     await message.answer(
-        "🗑 <b>История очищена.</b> Начинаем новый диалог!",
+        f"{PE_TRASH} <b>История очищена.</b> Начинаем новый диалог!",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(message.from_user.id)
     )
@@ -2141,16 +2175,17 @@ async def cmd_new(message: Message):
 # ─── /status ──────────────────────────────────────────────────────────────────
 
 @router.message(Command("status"))
+@router.message(F.text == "Настройки")
 @router.message(F.text == "⚙️ Настройки")
 async def cmd_status(message: Message):
     session = get_session(message.from_user.id)
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
     text = (
-        f"⚙️ <b>Текущие настройки:</b>\n\n"
+        f"{PE_SETTINGS} <b>Текущие настройки:</b>\n\n"
         f"{pe('5258093637450866522', '🤖')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
-        f"🎭 Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
-        f"🌡 Температура: <b>{session['temperature']:.1f}</b>\n"
+        f"{PE_ROLE} Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
+        f"{PE_TEMPERATURE} Температура: <b>{session['temperature']:.1f}</b>\n"
         f"{PE_CHAT} Сообщений в истории: <b>{len(session['history'])}</b>"
     )
     kb = settings_keyboard(message.from_user.id)
@@ -2194,7 +2229,7 @@ async def cmd_profile(message: Message):
         f"📅 Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
         f"🕐 Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
         f"🤖 Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
-        f"🎭 Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
+        f"{PE_ROLE} Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
     )
     if vip:
         text += (
@@ -3252,7 +3287,7 @@ async def cb_style_menu(callback: CallbackQuery, bot: Bot):
     await bot.send_message(
         chat_id=callback.message.chat.id,
         text=(
-            f"🗣 <b>Стиль общения нейросети</b>\n\n"
+            f"{PE_SPEECH} <b>Стиль общения нейросети</b>\n\n"
             f"Выбери, как именно ИИ будет с тобой общаться:\n\n"
             f"{styles_text}\n\n"
             f"{PE_DOWN} Выбери стиль:"
@@ -3405,6 +3440,7 @@ IMG_WELCOME_TEXT = (
 @router.message(Command("img"))
 @router.message(F.text == "🎨 Нейро-фото")
 @router.message(F.text == "✨ Генерация")
+@router.message(F.text == "Генерация")
 async def cmd_img(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -4261,7 +4297,7 @@ async def fsm_case_name(message: Message, state: FSMContext):
     await state.update_data(case_name=name)
     await state.set_state(CaseStates.waiting_case_total)
     await message.answer(
-        f"🎁 <b>Создание кейса: «{name}»</b>\n\nШаг 2/3: Введите <b>общее количество</b> кейсов (целое число):",
+        f"{PE_GIFT} <b>Создание кейса: «{name}»</b>\n\nШаг 2/3: Введите <b>общее количество</b> кейсов (целое число):",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases")]
@@ -4298,7 +4334,7 @@ async def fsm_case_total(message: Message, state: FSMContext):
     await state.update_data(case_total=total)
     await state.set_state(CaseStates.waiting_case_limit)
     await message.answer(
-        f"🎁 <b>Создание кейса: «{data['case_name']}»</b>\n\nШаг 3/3: Введите <b>лимит открытий на одного пользователя</b>:",
+        f"{PE_GIFT} <b>Создание кейса: «{data['case_name']}»</b>\n\nШаг 3/3: Введите <b>лимит открытий на одного пользователя</b>:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases", style="danger")]
@@ -4336,7 +4372,7 @@ async def fsm_case_limit(message: Message, state: FSMContext):
     case = create_case(data["case_name"], data["case_total"], limit)
     await message.answer(
         f"✅ <b>Кейс создан!</b>\n\n"
-        f"🎁 Название: <b>{case['name']}</b>\n"
+        f"{PE_GIFT} Название: <b>{case['name']}</b>\n"
         f"📦 Количество: <b>{case['total_count']}</b>\n"
         f"👤 Лимит на пользователя: <b>{case['per_user_limit']}</b>",
         parse_mode=ParseMode.HTML,
@@ -5285,8 +5321,9 @@ def admin_cases_keyboard() -> InlineKeyboardMarkup:
     for c in cases:
         remaining = c["total_count"] - c["opened_count"]
         btn = InlineKeyboardButton(
-            text=f"🎁 {c['name']} ({remaining}/{c['total_count']})",
+            text=f"{c['name']} ({remaining}/{c['total_count']})",
             callback_data=f"acase:edit:{c['id']}",
+            icon_custom_emoji_id=EMOJI_GIFT_ID,
         )
         btn.style = "primary"
         rows.append([btn])
@@ -5324,15 +5361,15 @@ def prizes_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
-    def _btn(text, cb, style="primary"):
-        b = InlineKeyboardButton(text=text, callback_data=cb)
+    def _btn(text, cb, style="primary", emoji_id=None):
+        b = InlineKeyboardButton(text=text, callback_data=cb, icon_custom_emoji_id=emoji_id)
         b.style = style
         return b
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("✏️ Изменить название", f"acase:rename:{case_id}")],
         [_btn("🔢 Изменить количество", f"acase:settotal:{case_id}")],
         [_btn("👤 Изменить лимит на пользователя", f"acase:setlimit:{case_id}")],
-        [_btn("🗑 Удалить кейс", f"acase:delete:{case_id}", "danger")],
+        [_btn("Удалить кейс", f"acase:delete:{case_id}", "danger", EMOJI_TRASH_ID)],
         [_btn("◀️ К кейсам", "admin:cases")],
     ])
 
@@ -5449,7 +5486,7 @@ async def cb_case_view(callback: CallbackQuery, bot: Bot):
         f"<b>Твои попытки:</b>  {user_opens} / {c['per_user_limit']}\n"
         f"{status_line}\n\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 <b>Возможные призы:</b>\n"
+        f"{PE_IDEA} <b>Возможные призы:</b>\n"
         f"  💨  Пусто (часто)\n"
         f"  🪙  10 · 25 · 50 · 100 ZenoToken\n"
         f"  🎟  3 · 5 · 10 генераций изображений\n"
@@ -5549,7 +5586,7 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
                 f"╚═══════════════╝\n\n"
                 f"На этот раз кейс оказался пустым.\n\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Попробуй ещё раз, удача где-то рядом! 🎁</i>",
+                f"<i>Попробуй ещё раз, удача где-то рядом! {PE_GIFT}</i>",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -5581,7 +5618,7 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
             f"▸ {detail}\n"
             f"▸ {balance_line}\n\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>Хочешь ещё? Жми 🎁 Кейсы!</i>",
+            f"<i>Хочешь ещё? Жми {PE_GIFT} Кейсы!</i>",
             parse_mode=ParseMode.HTML,
         )
     except Exception:
@@ -5596,7 +5633,7 @@ async def cb_admin_cases(callback: CallbackQuery):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     cases = get_all_cases()
-    text = f"🎁 <b>Управление кейсами</b>\n\nВсего кейсов: <b>{len(cases)}</b>\n\nВыберите кейс для настройки или создайте новый:"
+    text = f"{PE_GIFT} <b>Управление кейсами</b>\n\nВсего кейсов: <b>{len(cases)}</b>\n\nВыберите кейс для настройки или создайте новый:"
     await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=admin_cases_keyboard())
     await callback.answer()
 
@@ -5608,7 +5645,7 @@ async def cb_acase_create(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(CaseStates.waiting_case_name)
     await callback.message.edit_text(
-        "🎁 <b>Создание кейса</b>\n\nШаг 1/3: Введите <b>название</b> кейса:",
+        f"{PE_GIFT} <b>Создание кейса</b>\n\nШаг 1/3: Введите <b>название</b> кейса:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cases", style="danger")]
@@ -5630,7 +5667,7 @@ async def cb_acase_edit(callback: CallbackQuery):
         return
     remaining = c["total_count"] - c["opened_count"]
     await callback.message.edit_text(
-        f"🎁 <b>{c['name']}</b>\n\n"
+        f"{PE_GIFT} <b>{c['name']}</b>\n\n"
         f"📦 Всего: {c['total_count']} | Открыто: {c['opened_count']} | Осталось: {remaining}\n"
         f"👤 Лимит на пользователя: {c['per_user_limit']}\n\n"
         f"Выберите действие:",
@@ -5650,7 +5687,7 @@ async def cb_acase_delete(callback: CallbackQuery):
     name = data.get(case_id, {}).get("name", case_id)
     delete_case(case_id)
     await callback.message.edit_text(
-        f"🗑 Кейс <b>«{name}»</b> удалён.",
+        f"{PE_TRASH} Кейс <b>«{name}»</b> удалён.",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cases_keyboard(),
     )
