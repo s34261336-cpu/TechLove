@@ -416,6 +416,15 @@ def pe(emoji_id: str, fallback: str) -> str:
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 
+PE_WAVE = pe("5208636315943322311", "👋")
+PE_CHAT = pe("5904248647972820334", "💬")
+PE_SEARCH = pe("5874960879434338403", "🔎")
+PE_PIN = pe("5796440171364749940", "📌")
+PE_ROCKET = pe("5258332798409783582", "🚀")
+PE_SPARKLES = pe("5890925363067886150", "✨")
+PE_DOWN = pe("5778147300060696808", "👇")
+
+
 # Emoji IDs shown on model buttons depending on restriction state
 EMOJI_RESTRICTED_PERM = "5278578973595427038"
 EMOJI_RESTRICTED_TEMP = "5276240711795107620"
@@ -563,9 +572,9 @@ MODELS = {
         "name": "MiniMax M2.7",
         "model_id": "MiniMax-M2.7",
         "description": "Новая производственная модель MiniMax на SambaNova. Большой контекст и сильная логика.",
-        "emoji": "🚀",
-        "emoji_html": pe("5314536790874230525", "🚀"),
-        "emoji_id": "5314536790874230525",
+        "emoji": PE_ROCKET,
+        "emoji_html": PE_ROCKET,
+        "emoji_id": "5258332798409783582",
         "provider": "sambanova",
     },
     "sn_llama_33_70b": {
@@ -581,9 +590,9 @@ MODELS = {
         "name": "Nemotron Ultra 550B",
         "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "description": "Гигантская 550B модель от NVIDIA. Один из самых мощных открытых ИИ в мире.",
-        "emoji": "🚀",
-        "emoji_html": pe("5314536790874230525", "🚀"),
-        "emoji_id": "5314536790874230525",
+        "emoji": PE_ROCKET,
+        "emoji_html": PE_ROCKET,
+        "emoji_id": "5258332798409783582",
         "provider": "openrouter",
     },
     "or_nemotron_120b": {
@@ -745,10 +754,10 @@ def get_simple_greeting(text: str) -> str | None:
     if normalized in {"доброе утро"}:
         return f"{greeting}! ☀️"
     if normalized in {"добрый день"}:
-        return f"{greeting}! 👋"
+        return f"{greeting}! {PE_WAVE}"
     if normalized in {"добрый вечер"}:
         return f"{greeting}! 🌙"
-    return f"{greeting}! 👋"
+    return f"{greeting}! {PE_WAVE}"
 
 
 def detect_mood(text: str) -> str:
@@ -1523,7 +1532,7 @@ def maintenance_text() -> str:
         time_line = f"⏱ Ориентировочное время окончания: <b>{until_str}</b>"
     else:
         time_line = "⏱ Время окончания пока неизвестно."
-    reason_line = f"📌 Причина: <i>{reason}</i>" if reason else ""
+    reason_line = f"{PE_PIN} Причина: <i>{reason}</i>" if reason else ""
     return (
         f"🔧 <b>Бот на технических работах</b>\n\n"
         f"Мы уже всё чиним — скоро вернёмся!\n\n"
@@ -2012,14 +2021,14 @@ async def cmd_start(message: Message):
     role = ROLES[session["role"]]
     style = STYLES[session["style"]]
     caption = (
-        f"👋 Добро пожаловать, <b>{user.first_name}</b>!\n\n"
+        f"{PE_WAVE} Добро пожаловать, <b>{user.first_name}</b>!\n\n"
         f"Это <b>Zeno AI</b> — умный помощник для идей, ответов и задач на каждый день.\n\n"
-        f"💬 Задавай вопросы и веди диалог с учётом истории\n"
-        f"🔎 Ищи актуальную информацию в интернете\n"
-        f"✨ Создавай изображения и работай с фотографиями\n"
+        f"{PE_CHAT} Задавай вопросы и веди диалог с учётом истории\n"
+        f"{PE_SEARCH} Ищи актуальную информацию в интернете\n"
+        f"{PE_SPARKLES} Создавай изображения и работай с фотографиями\n"
         f"🎭 Выбирай роль и стиль общения под себя\n\n"
-        f"🚀 <b>Начать просто:</b> напиши сообщение ниже или выбери нужный раздел в меню.\n\n"
-        f"📌 <b>Твои текущие настройки:</b>\n"
+        f"{PE_ROCKET} <b>Начать просто:</b> напиши сообщение ниже или выбери нужный раздел в меню.\n\n"
+        f"{PE_PIN} <b>Твои текущие настройки:</b>\n"
         f"• Модель: {model['emoji_html']} {model['name']}\n"
         f"• Роль: {role['emoji_html']} {role['name']}\n"
         f"• Стиль: {style['emoji']} {style['name']}\n\n"
@@ -2033,7 +2042,7 @@ async def cmd_start(message: Message):
         reply_markup=start_inline_keyboard(),
     )
     await message.answer(
-        "👇 Выбери раздел:",
+        f"{PE_DOWN} Выбери раздел:",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(user.id),
     )
@@ -2057,8 +2066,8 @@ async def cmd_help(message: Message):
         f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
-        "✨ <b>Генерация</b> — бесплатные видео и фото по описанию\n"
-        "🔎 <b>Найди в интернете</b> — поиск актуальной информации\n"
+        f"{PE_SPARKLES} <b>Генерация</b> — бесплатные видео и фото по описанию\n"
+        f"{PE_SEARCH} <b>Найди в интернете</b> — поиск актуальной информации\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
         "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
@@ -2142,7 +2151,7 @@ async def cmd_status(message: Message):
         f"{pe('5258093637450866522', '🤖')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
         f"🎭 Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
         f"🌡 Температура: <b>{session['temperature']:.1f}</b>\n"
-        f"💬 Сообщений в истории: <b>{len(session['history'])}</b>"
+        f"{PE_CHAT} Сообщений в истории: <b>{len(session['history'])}</b>"
     )
     kb = settings_keyboard(message.from_user.id)
     if await send_configured_photo(message, "settings", text, kb):
@@ -2181,7 +2190,7 @@ async def cmd_profile(message: Message):
         f"🆔 ID: <code>{profile['user_id']}</code>\n\n"
         f"🪙 <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n"
         f"🎟 <b>Генерации: {free_gens}</b>\n\n"
-        f"💬 Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
+        f"{PE_CHAT} Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
         f"📅 Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
         f"🕐 Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
         f"🤖 Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
@@ -2279,7 +2288,7 @@ async def cb_admin_stats(callback: CallbackQuery):
     text = (
         f"📊 <b>Статистика бота</b>\n\n"
         f"👥 Всего пользователей: <b>{len(users)}</b>\n"
-        f"💬 Всего сообщений: <b>{total_msgs}</b>\n"
+        f"{PE_CHAT} Всего сообщений: <b>{total_msgs}</b>\n"
         f"🪙 Всего ZenoToken выдано: <b>{total_tokens}</b>\n\n"
         f"🏆 <b>Топ по ZenoToken:</b>\n{top_text or '—'}"
     )
@@ -2306,7 +2315,7 @@ async def cb_admin_users(callback: CallbackQuery):
         uname = f"@{u['username']}" if u.get("username") else f"id{u['user_id']}"
         lines.append(
             f"• <b>{u['first_name']}</b> ({uname})\n"
-            f"  🪙 {u.get('zenotoken', 0)} | 💬 {u.get('messages_count', 0)} | 🕐 {u.get('last_seen', '—')}"
+            f"  🪙 {u.get('zenotoken', 0)} | {PE_CHAT} {u.get('messages_count', 0)} | 🕐 {u.get('last_seen', '—')}"
         )
     text = f"👥 <b>Последние {len(recent)} пользователей:</b>\n\n" + "\n\n".join(lines)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2718,7 +2727,7 @@ async def fsm_maintenance_reason(message: Message, state: FSMContext):
     await message.answer(
         f"🔧 <b>Тех. работы включены!</b>\n\n"
         f"{time_info}\n"
-        f"📌 Причина: <i>{reason}</i>\n\n"
+        f"{PE_PIN} Причина: <i>{reason}</i>\n\n"
         f"Все пользователи будут получать сообщение о работах.\n"
         f"Чтобы выключить — нажми <b>🔧 Тех. работы</b> в админ панели ещё раз.",
         parse_mode=ParseMode.HTML,
@@ -3010,7 +3019,7 @@ async def fsm_give_user(message: Message, state: FSMContext):
             f"🔗 Username: <b>{uname}</b>\n"
             f"🆔 ID: <code>{found['user_id']}</code>\n"
             f"🪙 ZenoToken: <b>{found.get('zenotoken', 0)}</b>\n"
-            f"💬 Сообщений: <b>{found.get('messages_count', 0)}</b>\n"
+            f"{PE_CHAT} Сообщений: <b>{found.get('messages_count', 0)}</b>\n"
             f"📅 Регистрация: <b>{found.get('joined_at', '—')}</b>\n"
             f"🕐 Последняя активность: <b>{found.get('last_seen', '—')}</b>"
         )
@@ -3246,7 +3255,7 @@ async def cb_style_menu(callback: CallbackQuery, bot: Bot):
             f"🗣 <b>Стиль общения нейросети</b>\n\n"
             f"Выбери, как именно ИИ будет с тобой общаться:\n\n"
             f"{styles_text}\n\n"
-            f"👇 Выбери стиль:"
+            f"{PE_DOWN} Выбери стиль:"
         ),
         parse_mode=ParseMode.HTML,
         reply_markup=styles_keyboard(current),
@@ -3268,7 +3277,7 @@ async def cb_style(callback: CallbackQuery):
         f"{style['emoji']} <b>Стиль общения изменён: {style['name']}</b>\n\n"
         f"<i>{style['description']}</i>\n\n"
         f"История диалога сброшена, чтобы стиль применился сразу.\n\n"
-        f"👇 Хочешь поменять ещё раз?",
+        f"{PE_DOWN} Хочешь поменять ещё раз?",
         parse_mode=ParseMode.HTML,
         reply_markup=styles_keyboard(style_key),
     )
@@ -3403,7 +3412,7 @@ async def cmd_img(message: Message, state: FSMContext):
          InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
     ])
     text = (
-        "✨ <b>Генерация по описанию</b>\n\n"
+        f"{PE_SPARKLES} <b>Генерация по описанию</b>\n\n"
         "Выберите, что создать:\n"
         "🖼 <b>Фото</b> — изображение по вашему описанию.\n"
         "🎬 <b>Видео</b> — короткий клип с плавной анимацией.\n\n"
@@ -3984,7 +3993,7 @@ async def cb_img_cancel(callback: CallbackQuery, state: FSMContext):
 async def cb_img_home(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     text = (
-        "✨ <b>Генерация по описанию</b>\n\n"
+        f"{PE_SPARKLES} <b>Генерация по описанию</b>\n\n"
         "🖼 Фото — по текущей цене генерации.\n"
         "🎬 Видео — бесплатно."
     )
@@ -3998,7 +4007,7 @@ async def cb_img_home(callback: CallbackQuery, state: FSMContext):
         try:
             await callback.message.answer_photo(
                 media_id,
-                caption="✨ <b>Генерация по описанию</b>",
+                caption=f"{PE_SPARKLES} <b>Генерация по описанию</b>",
                 parse_mode=ParseMode.HTML,
             )
         except Exception as exc:
@@ -4823,7 +4832,7 @@ async def start_search(message: Message, state: FSMContext):
     await state.set_state(SearchStates.waiting_query)
     await state.update_data(search_mode="quick")
     await message.answer(
-        "🔎 Напиши запрос, который нужно найти в интернете.\n"
+        f"{PE_SEARCH} Напиши запрос, который нужно найти в интернете.\n"
         "Например: <i>какая погода будет в Москве завтра</i>\n\n"
         "Для подробного разбора сначала нажми кнопку ниже.",
         parse_mode=ParseMode.HTML,
@@ -4861,7 +4870,7 @@ async def run_search(message: Message, state: FSMContext, query: str):
         )
         return
 
-    status = await message.answer("🔎 Ищу информацию в интернете…")
+    status = await message.answer(f"{PE_SEARCH} Ищу информацию в интернете…", parse_mode=ParseMode.HTML)
     try:
         results = await search_web(query)
         answer = await summarize_search_results(query, results)
@@ -5127,7 +5136,7 @@ async def process_text_message(message: Message, text: str):
 
     simple_greeting = get_simple_greeting(text)
     if simple_greeting:
-        await message.answer(simple_greeting)
+        await message.answer(simple_greeting, parse_mode=ParseMode.HTML)
         return
 
     await hydrate_user_session(user_id)
@@ -5146,7 +5155,7 @@ async def process_text_message(message: Message, text: str):
             await message.answer(
                 f"⚠️ <b>{model['name']}</b> сейчас недоступна.\n\n"
                 f"{time_note}\n"
-                f"📌 Причина: <i>{r['reason']}</i>\n\n"
+        f"{PE_PIN} Причина: <i>{r['reason']}</i>\n\n"
                 f"Выберите другую модель через кнопку 🤖 Модель.",
                 parse_mode=ParseMode.HTML,
             )
@@ -5389,7 +5398,7 @@ async def cb_cases_list(callback: CallbackQuery, bot: Bot):
         "",
         "🪙 ZenoToken  •  🎟 Генерации  •  👑 VIP",
         "",
-        "👇 Выбери кейс и испытай удачу:",
+        f"{PE_DOWN} Выбери кейс и испытай удачу:",
     ]
 
     cases_text = "\n".join(lines)
