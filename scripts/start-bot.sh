@@ -20,11 +20,13 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
           ':(exclude)models_data.json' \
           ':(exclude)cases_data.json' \
           ':(exclude)reminders_data.json' \
+          ':(exclude)media_data.json' \
           && git diff --cached --quiet -- . \
           ':(exclude)users_data.json' \
           ':(exclude)models_data.json' \
           ':(exclude)cases_data.json' \
-          ':(exclude)reminders_data.json'; then
+          ':(exclude)reminders_data.json' \
+          ':(exclude)media_data.json'; then
           git merge --ff-only origin/main
           log "Код обновлён до $(git rev-parse --short HEAD)."
         else

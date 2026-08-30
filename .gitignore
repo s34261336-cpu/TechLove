@@ -65,6 +65,7 @@ __pycache__/
 !.env.example
 *.pem
 *.key
+media_data.json
 
 # Agent workspace metadata
 .agents/

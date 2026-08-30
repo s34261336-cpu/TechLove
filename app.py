@@ -71,8 +71,112 @@ USERS_FILE = "users_data.json"
 MODELS_FILE = "models_data.json"
 CASES_FILE = "cases_data.json"
 REMINDERS_FILE = "reminders_data.json"
+MEDIA_FILE = "media_data.json"
+DEFAULT_MAIN_IMAGE = "attached_assets/IMG_20260810_101608_213_1787023992393.jpg"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 REMINDERS_LOCK = threading.Lock()
+
+MEDIA_BLOCKS = {
+    "main_menu": {
+        "label": "Главное меню",
+        "description": "приветствие после /start",
+    },
+    "generation": {
+        "label": "Генерация",
+        "description": "экран создания фото и видео",
+    },
+    "profile": {
+        "label": "Профиль",
+        "description": "профиль и баланс пользователя",
+    },
+    "models": {
+        "label": "Модели",
+        "description": "выбор модели ИИ",
+    },
+    "roles": {
+        "label": "Роли",
+        "description": "выбор роли ассистента",
+    },
+    "settings": {
+        "label": "Настройки",
+        "description": "температура и текущие настройки",
+    },
+    "help": {
+        "label": "Помощь",
+        "description": "справка по возможностям бота",
+    },
+    "cases": {
+        "label": "Кейсы",
+        "description": "список кейсов",
+    },
+}
+
+
+def load_media_settings() -> dict:
+    if os.path.exists(MEDIA_FILE):
+        try:
+            with open(MEDIA_FILE, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Не удалось прочитать настройки фотографий")
+    return {}
+
+
+def save_media_settings(data: dict) -> None:
+    temp_file = f"{MEDIA_FILE}.tmp"
+    with open(temp_file, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+    os.replace(temp_file, MEDIA_FILE)
+
+
+def get_media_file_id(block_key: str) -> str | None:
+    value = load_media_settings().get(block_key)
+    if isinstance(value, dict):
+        file_id = value.get("file_id")
+        return file_id if isinstance(file_id, str) and file_id else None
+    return None
+
+
+def set_media_file_id(block_key: str, file_id: str) -> None:
+    data = load_media_settings()
+    data[block_key] = {
+        "file_id": file_id,
+        "updated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+    }
+    save_media_settings(data)
+
+
+def delete_media_file(block_key: str) -> bool:
+    data = load_media_settings()
+    if block_key not in data:
+        return False
+    data.pop(block_key, None)
+    save_media_settings(data)
+    return True
+
+
+async def send_configured_photo(
+    message: Message,
+    block_key: str,
+    caption: str,
+    reply_markup=None,
+) -> bool:
+    """Send a block's configured Telegram photo, returning False when absent."""
+    file_id = get_media_file_id(block_key)
+    if not file_id or len(caption) > 1024:
+        return False
+    try:
+        await message.answer_photo(
+            file_id,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("Фото блока %s не отправлено: %s", block_key, exc)
+        return False
 
 
 # ─── Supabase user memory ────────────────────────────────────────────────────
@@ -814,6 +918,19 @@ def give_tokens(user_id: int, amount: int) -> int:
     save_users(data)
     return data[uid]["zenotoken"]
 
+
+def give_generations(user_id: int, amount: int) -> int:
+    """Add or remove image/video generations for a user."""
+    data = load_users()
+    uid = str(user_id)
+    if uid not in data:
+        return -1
+    current = data[uid].get("free_gens", 0)
+    data[uid]["free_gens"] = max(0, current + amount)
+    save_users(data)
+    return data[uid]["free_gens"]
+
+
 def deduct_tokens(user_id: int, amount: int) -> tuple[bool, int]:
     """Deduct tokens from user balance.
     Returns (success, new_balance). success=False means insufficient funds.
@@ -1436,6 +1553,9 @@ class AdminStates(StatesGroup):
     waiting_broadcast = State()
     waiting_give_user = State()
     waiting_give_amount = State()
+    waiting_give_generation_user = State()
+    waiting_give_generation_amount = State()
+    waiting_media_photo = State()
     waiting_restrict_reason = State()
     waiting_temp_duration = State()
     waiting_temp_reason = State()
@@ -1747,15 +1867,51 @@ def admin_keyboard() -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("📢 Рассылка", "admin:broadcast"), _btn("🪙 Выдать ZenoToken", "admin:give", "success")],
+        [_btn("🎟 Выдать генерации", "admin:give_generations", "success")],
         [_btn("📊 Статистика", "admin:stats"), _btn("👥 Пользователи", "admin:users")],
         [_btn("🔍 Найти пользователя", "admin:find")],
         [_btn("🤖 Управление моделями", "admin:models")],
         [_btn("💰 Цены моделей", "admin:prices")],
         [_btn("🖼 Цена фото", "admin:imgprice"), _btn("🎬 Цена видео", "admin:videoprice")],
+        [_btn("🖼 Фото блоков", "admin:media")],
         [_btn("🎁 Управление кейсами", "admin:cases")],
         [_btn(test_label, "admin:testmode", test_style)],
         [_btn(maint_label, "admin:maintenance", maint_style)],
     ])
+
+
+def admin_media_text() -> str:
+    configured = sum(1 for key in MEDIA_BLOCKS if get_media_file_id(key))
+    return (
+        "🖼 <b>Фотографии разделов</b>\n\n"
+        "Здесь можно заменить изображение для любого блока бота. "
+        "Отправьте фото после выбора нужного раздела.\n\n"
+        f"Настроено: <b>{configured}/{len(MEDIA_BLOCKS)}</b>\n"
+        "Для главного меню без своей фотографии используется стандартная."
+    )
+
+
+def admin_media_keyboard() -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, block in MEDIA_BLOCKS.items():
+        configured = bool(get_media_file_id(key))
+        status = "✅" if configured else "▫️"
+        set_button = InlineKeyboardButton(
+            text=f"{status} {block['label']}",
+            callback_data=f"admin:media:set:{key}",
+        )
+        set_button.style = "success" if configured else "primary"
+        row = [set_button]
+        if configured:
+            delete_button = InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"admin:media:delete:{key}",
+            )
+            delete_button.style = "danger"
+            row.append(delete_button)
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_models_keyboard() -> InlineKeyboardMarkup:
@@ -1869,7 +2025,7 @@ async def cmd_start(message: Message):
         f"• Стиль: {style['emoji']} {style['name']}\n\n"
         f"💡 Можно начать с команды: <b>«Помоги мне с…»</b>"
     )
-    photo = FSInputFile("attached_assets/IMG_20260810_101608_213_1787023992393.jpg")
+    photo = get_media_file_id("main_menu") or FSInputFile(DEFAULT_MAIN_IMAGE)
     await message.answer_photo(
         photo,
         caption=caption,
@@ -1918,6 +2074,13 @@ async def cmd_help(message: Message):
         "/help — помощь"
     )
     kb = main_keyboard(message.from_user.id)
+    if len(text) > 1024 and await send_configured_photo(
+        message, "help", "📖 <b>Как пользоваться:</b>"
+    ):
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if await send_configured_photo(message, "help", text, kb):
+        return
     try:
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     except TelegramBadRequest as e:
@@ -1934,11 +2097,10 @@ async def cmd_help(message: Message):
 async def cmd_model(message: Message):
     session = get_session(message.from_user.id)
     filter_mode = session.get("models_filter", "all")
-    await message.answer(
-        f"{pe('5258093637450866522', '🤖')} <b>Выберите модель ИИ:</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=models_keyboard(session["model"], filter_mode)
-    )
+    text = f"{pe('5258093637450866522', '🤖')} <b>Выберите модель ИИ:</b>"
+    keyboard = models_keyboard(session["model"], filter_mode)
+    if not await send_configured_photo(message, "models", text, keyboard):
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 # ─── /role ────────────────────────────────────────────────────────────────────
@@ -1947,11 +2109,10 @@ async def cmd_model(message: Message):
 @router.message(F.text == "🎭 Роль")
 async def cmd_role(message: Message):
     session = get_session(message.from_user.id)
-    await message.answer(
-        f"{pe('6032625495328165724', '🎭')} <b>Выберите роль ассистента:</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=roles_keyboard(session["role"])
-    )
+    text = f"{pe('6032625495328165724', '🎭')} <b>Выберите роль ассистента:</b>"
+    keyboard = roles_keyboard(session["role"])
+    if not await send_configured_photo(message, "roles", text, keyboard):
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 # ─── /new ─────────────────────────────────────────────────────────────────────
@@ -1984,6 +2145,8 @@ async def cmd_status(message: Message):
         f"💬 Сообщений в истории: <b>{len(session['history'])}</b>"
     )
     kb = settings_keyboard(message.from_user.id)
+    if await send_configured_photo(message, "settings", text, kb):
+        return
     try:
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     except TelegramBadRequest as e:
@@ -2031,7 +2194,8 @@ async def cmd_profile(message: Message):
             "• 🤖 Все платные модели бесплатны\n"
             "• ⚡ Антиспам вдвое мягче"
         )
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    if not await send_configured_photo(message, "profile", text):
+        await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
@@ -2079,6 +2243,22 @@ async def cb_admin_give(callback: CallbackQuery, state: FSMContext):
         "🪙 <b>Выдача ZenoToken</b>\n\nВведите ID пользователя или @username:",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:give_generations")
+async def cb_admin_give_generations(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_give_generation_user)
+    await callback.message.edit_text(
+        "🎟 <b>Выдача генераций</b>\n\n"
+        "Введите ID пользователя или @username.\n"
+        "Генерации используются для фото и видео.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
 
@@ -2173,20 +2353,126 @@ async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменено")
 
 
+# ─── Admin: section photos ────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:media")
+async def cb_admin_media(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        admin_media_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_media_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:media:set:"))
+async def cb_admin_media_set(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    block_key = callback.data.split(":", 3)[3]
+    block = MEDIA_BLOCKS.get(block_key)
+    if not block:
+        await callback.answer("Раздел не найден", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_media_photo)
+    await state.update_data(media_block_key=block_key)
+    await callback.message.edit_text(
+        f"🖼 <b>Фото: {block['label']}</b>\n\n"
+        f"Этот снимок будет показываться в разделе «{block['label']}» "
+        f"({block['description']}).\n\n"
+        "Отправьте одно фото следующим сообщением.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:media:delete:"))
+async def cb_admin_media_delete(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    block_key = callback.data.split(":", 3)[3]
+    block = MEDIA_BLOCKS.get(block_key)
+    if not block:
+        await callback.answer("Раздел не найден", show_alert=True)
+        return
+    removed = delete_media_file(block_key)
+    await callback.message.edit_text(
+        admin_media_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_media_keyboard(),
+    )
+    await callback.answer(
+        "Фото удалено, включён стандартный вариант." if removed else "Фото уже не задано.",
+        show_alert=True,
+    )
+
+
+@router.message(AdminStates.waiting_media_photo, F.photo)
+async def fsm_admin_media_photo(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    block_key = data.get("media_block_key")
+    block = MEDIA_BLOCKS.get(block_key)
+    if not block:
+        await state.clear()
+        await message.answer("❌ Раздел не найден.", reply_markup=main_keyboard(ADMIN_ID))
+        return
+    set_media_file_id(block_key, message.photo[-1].file_id)
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Фото обновлено</b>\n\n"
+        f"Раздел: <b>{block['label']}</b>\n"
+        "Новое изображение будет использоваться сразу.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_media_keyboard(),
+    )
+
+
+@router.message(AdminStates.waiting_media_photo)
+async def fsm_admin_media_photo_invalid(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer(
+        "❌ Нужно отправить именно фотографию. Можно выбрать JPEG или PNG.",
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
 # ─── Admin: Price management ──────────────────────────────────────────────────
 
 def admin_prices_keyboard() -> InlineKeyboardMarkup:
-    buttons = []
-    for key, model in MODELS.items():
-        price = get_model_price(key)
-        price_label = f"🆓 Бесплатно" if price == 0 else f"🪙 {price}"
-        buttons.append([InlineKeyboardButton(
-            text=f"{model['name']} — {price_label}",
-            callback_data=f"aprice:pick:{key}",
-            icon_custom_emoji_id=model["emoji_id"],
-        )])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    provider_groups = [
+        ("groq", "⚡ GROQ"),
+        ("seekai", "🧭 SEEKAI"),
+        ("sambanova", "🔥 SAMBANOVA"),
+        ("openrouter", "🌐 OPENROUTER"),
+        ("mistral", "🇫🇷 MISTRAL"),
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for provider_key, provider_label in provider_groups:
+        group_buttons = []
+        for key, model in MODELS.items():
+            if model.get("provider", "groq") != provider_key:
+                continue
+            price = get_model_price(key)
+            price_label = "🆓 Бесплатно" if price == 0 else f"🪙 {price}"
+            group_buttons.append(InlineKeyboardButton(
+                text=f"{model['name']} — {price_label}",
+                callback_data=f"aprice:pick:{key}",
+                icon_custom_emoji_id=model["emoji_id"],
+            ))
+        if group_buttons:
+            rows.append([InlineKeyboardButton(text=f"━━ {provider_label} ━━", callback_data="noop")])
+            rows += [[button] for button in group_buttons]
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(F.data == "admin:prices")
@@ -2487,6 +2773,7 @@ async def cb_mctrl_info(callback: CallbackQuery):
 
     text = (
         f"{model['emoji_html']} <b>{model['name']}</b>\n\n"
+        f"Провайдер: <b>{model.get('provider', 'groq').upper()}</b>\n"
         f"{status_text}\n\n"
         f"Выберите действие:"
     )
@@ -2729,6 +3016,7 @@ async def fsm_give_user(message: Message, state: FSMContext):
         )
         give_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🪙 Выдать токены", callback_data=f"admin:give_to:{found['user_id']}")],
+            [InlineKeyboardButton(text="🎟 Выдать генерации", callback_data=f"admin:give_gens_to:{found['user_id']}")],
             [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
         ])
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=give_kb)
@@ -2741,6 +3029,98 @@ async def fsm_give_user(message: Message, state: FSMContext):
         f"Введите количество ZenoToken (можно отрицательное для снятия):",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
+    )
+
+
+# ─── FSM: Give generations ────────────────────────────────────────────────────
+
+@router.message(AdminStates.waiting_give_generation_user)
+async def fsm_give_generation_user(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    query = (message.text or "").strip().lstrip("@")
+    users = load_users()
+    found = None
+    if query.isdigit():
+        found = users.get(query)
+    else:
+        for user in users.values():
+            if user.get("username", "").lower() == query.lower():
+                found = user
+                break
+
+    if not found:
+        await message.answer(
+            f"❌ Пользователь <code>{html_escape(query)}</code> не найден в базе.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_cancel_keyboard(),
+        )
+        return
+
+    await state.set_state(AdminStates.waiting_give_generation_amount)
+    await state.update_data(
+        generation_target_user_id=found["user_id"],
+        generation_target_name=found.get("first_name", "Пользователь"),
+    )
+    await message.answer(
+        f"🎟 <b>Выдача генераций для {html_escape(found.get('first_name', 'пользователя'))}</b>\n\n"
+        f"Текущий баланс: <b>{found.get('free_gens', 0)} генераций</b>\n\n"
+        "Введите количество генераций.\n"
+        "Можно указать отрицательное число, чтобы забрать генерации.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.message(AdminStates.waiting_give_generation_amount)
+async def fsm_give_generation_amount(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        amount = int((message.text or "").strip())
+    except ValueError:
+        await message.answer(
+            "❌ Введите целое число, например: 5 или -2.",
+            reply_markup=admin_cancel_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    target_id = data["generation_target_user_id"]
+    target_name = data["generation_target_name"]
+    new_balance = give_generations(target_id, amount)
+    if new_balance == -1:
+        await state.clear()
+        await message.answer("❌ Пользователь не найден в базе.")
+        return
+
+    await state.clear()
+    sign = "+" if amount >= 0 else ""
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text=(
+                f"🎟 <b>Изменён баланс генераций</b>\n\n"
+                f"{sign}{amount} генераций\n"
+                f"Новый баланс: <b>{new_balance}</b>"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        notified = "✅ Пользователь уведомлён."
+    except Exception:
+        notified = "⚠️ Не удалось уведомить пользователя."
+
+    await message.answer(
+        f"🎟 <b>Готово!</b>\n\n"
+        f"Пользователь: <b>{html_escape(target_name)}</b>\n"
+        f"Изменение: <b>{sign}{amount}</b> генераций\n"
+        f"Новый баланс: <b>{new_balance}</b>\n\n"
+        f"{notified}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎟 Выдать ещё", callback_data="admin:give_generations")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")],
+        ]),
     )
 
 
@@ -2763,6 +3143,31 @@ async def cb_give_to(callback: CallbackQuery, state: FSMContext):
         f"Введите количество ZenoToken:",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:give_gens_to:"))
+async def cb_give_generations_to(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    uid = int(callback.data.split(":")[2])
+    found = load_users().get(str(uid))
+    if not found:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_give_generation_amount)
+    await state.update_data(
+        generation_target_user_id=uid,
+        generation_target_name=found.get("first_name", "Пользователь"),
+    )
+    await callback.message.edit_text(
+        f"🎟 <b>Выдача генераций для {html_escape(found.get('first_name', 'пользователя'))}</b>\n\n"
+        f"Текущий баланс: <b>{found.get('free_gens', 0)} генераций</b>\n\n"
+        "Введите количество генераций (можно отрицательное число):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
 
@@ -3006,7 +3411,8 @@ async def cmd_img(message: Message, state: FSMContext):
         f"🎬 Видео: {('🆓 Бесплатно' if get_video_gen_price() == 0 else f'{get_video_gen_price()} 🎟 за генерацию')}"
         + img_gen_info_text(message.from_user.id)
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    if not await send_configured_photo(message, "generation", text, kb):
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("img:mode:"))
@@ -3577,16 +3983,26 @@ async def cb_img_cancel(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "img:home")
 async def cb_img_home(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text(
+    text = (
         "✨ <b>Генерация по описанию</b>\n\n"
         "🖼 Фото — по текущей цене генерации.\n"
-        "🎬 Видео — бесплатно.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🖼 Фото", callback_data="img:mode:photo", style="primary"),
-             InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
-        ]),
+        "🎬 Видео — бесплатно."
     )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🖼 Фото", callback_data="img:mode:photo", style="primary"),
+         InlineKeyboardButton(text="🎬 Видео", callback_data="img:mode:video", style="success")],
+    ])
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    media_id = get_media_file_id("generation")
+    if media_id:
+        try:
+            await callback.message.answer_photo(
+                media_id,
+                caption="✨ <b>Генерация по описанию</b>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as exc:
+            logger.warning("Фото блока generation не отправлено: %s", exc)
     await callback.answer()
 
 
@@ -4940,16 +5356,26 @@ PRIZE_REEL_EMOJI = {
 async def cb_cases_list(callback: CallbackQuery, bot: Bot):
     cases = get_available_cases()
     if not cases:
-        await bot.send_message(
-            chat_id=callback.message.chat.id,
-            text=(
-                "📦 <b>Зона кейсов</b>\n\n"
-                "━━━━━━━━━━━━━━━━━━━\n"
-                "😔 Сейчас кейсов нет — все разобрали!\n\n"
-                "Загляни позже, скоро появятся новые 👀"
-            ),
-            parse_mode=ParseMode.HTML,
+        empty_text = (
+            "📦 <b>Зона кейсов</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "😔 Сейчас кейсов нет — все разобрали!\n\n"
+            "Загляни позже, скоро появятся новые 👀"
         )
+        media_id = get_media_file_id("cases")
+        if media_id and len(empty_text) <= 1024:
+            await bot.send_photo(
+                chat_id=callback.message.chat.id,
+                photo=media_id,
+                caption=empty_text,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=empty_text,
+                parse_mode=ParseMode.HTML,
+            )
         await callback.answer()
         return
 
@@ -4966,12 +5392,23 @@ async def cb_cases_list(callback: CallbackQuery, bot: Bot):
         "👇 Выбери кейс и испытай удачу:",
     ]
 
-    await bot.send_message(
-        chat_id=callback.message.chat.id,
-        text="\n".join(lines),
-        parse_mode=ParseMode.HTML,
-        reply_markup=cases_list_keyboard(cases),
-    )
+    cases_text = "\n".join(lines)
+    media_id = get_media_file_id("cases")
+    if media_id and len(cases_text) <= 1024:
+        await bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo=media_id,
+            caption=cases_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=cases_list_keyboard(cases),
+        )
+    else:
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=cases_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=cases_list_keyboard(cases),
+        )
     await callback.answer()
 
 

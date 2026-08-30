@@ -37,6 +37,7 @@ def update_from_origin() -> None:
             ":(exclude)models_data.json",
             ":(exclude)cases_data.json",
             ":(exclude)reminders_data.json",
+            ":(exclude)media_data.json",
         ]
         clean = subprocess.run(
             ["git", "diff", "--quiet", "--", ".", *runtime_data],
