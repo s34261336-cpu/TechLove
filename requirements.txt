@@ -4,3 +4,9 @@ av>=11.0
 groq
 faster-whisper
 imageio-ffmpeg
+aiogram==3.30.0
+aiohttp
+av>=11.0
+faster-whisper
+groq
+imageio-ffmpeg
