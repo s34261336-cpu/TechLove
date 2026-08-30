@@ -58,6 +58,22 @@ def pe(emoji_id: str, fallback: str) -> str:
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 
+PE_ART = pe("5814690801665446789", "🎨")
+PE_BRAIN = pe("5927026418616636353", "🧠")
+PE_EDIT = pe("5879841310902324730", "✏️")
+PE_LINK = pe("5375129357373165375", "🔗")
+PE_CLOCK = pe("5850317551090800862", "🕐")
+PE_ID = pe("5884366771913233289", "🆔")
+PE_LIGHTNING = pe("5778614884560278817", "⚡️")
+EMOJI_ART_ID = "5814690801665446789"
+EMOJI_BRAIN_ID = "5927026418616636353"
+EMOJI_EDIT_ID = "5879841310902324730"
+EMOJI_LINK_ID = "5375129357373165375"
+EMOJI_CLOCK_ID = "5850317551090800862"
+EMOJI_ID_ID = "5884366771913233289"
+EMOJI_LIGHTNING_ID = "5778614884560278817"
+
+
 # Emoji IDs shown on model buttons depending on restriction state
 EMOJI_RESTRICTED_PERM = "5278578973595427038"
 EMOJI_RESTRICTED_TEMP = "5276240711795107620"
@@ -94,24 +110,24 @@ MODELS = {
         "model_id": "openai/gpt-oss-20b",
         "description": "Быстрая 20B модель от OpenAI с открытыми весами. Молниеносные ответы.",
         "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
-        "emoji_id": "5323761960829862762",
+        "emoji_html": PE_LIGHTNING,
+        "emoji_id": EMOJI_LIGHTNING_ID,
     },
     "llama3_70b": {
         "name": "Llama 3.3 70B",
         "model_id": "llama-3.3-70b-versatile",
         "description": "Мощная универсальная модель. Отлично справляется с любыми задачами.",
-        "emoji": "🧠",
-        "emoji_html": pe("5805553606635559688", "🧠"),
-        "emoji_id": "5805553606635559688",
+        "emoji": PE_BRAIN,
+        "emoji_html": PE_BRAIN,
+        "emoji_id": EMOJI_BRAIN_ID,
     },
     "llama3_8b": {
         "name": "Llama 3.1 8B",
         "model_id": "llama-3.1-8b-instant",
         "description": "Молниеносная лёгкая модель. Идеальна для быстрых ответов.",
         "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
-        "emoji_id": "5323761960829862762",
+        "emoji_html": PE_LIGHTNING,
+        "emoji_id": EMOJI_LIGHTNING_ID,
     },
     "qwen3_27b": {
         "name": "Qwen3.6 27B",
@@ -141,9 +157,9 @@ MODELS = {
         "name": "DeepSeek V3.1",
         "model_id": "DeepSeek-V3.1",
         "description": "Новейший DeepSeek V3.1 — один из сильнейших открытых ИИ. Логика, код, анализ.",
-        "emoji": "🧠",
-        "emoji_html": pe("5805553606635559688", "🧠"),
-        "emoji_id": "5805553606635559688",
+        "emoji": PE_BRAIN,
+        "emoji_html": PE_BRAIN,
+        "emoji_id": EMOJI_BRAIN_ID,
         "provider": "sambanova",
         "max_tokens": 1024,
         "no_thinking": True,
@@ -193,8 +209,8 @@ MODELS = {
         "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
         "description": "120B модель NVIDIA. Умная, быстрая, отлично справляется со сложными задачами.",
         "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
-        "emoji_id": "5323761960829862762",
+        "emoji_html": PE_LIGHTNING,
+        "emoji_id": EMOJI_LIGHTNING_ID,
         "provider": "openrouter",
     },
     "or_nemotron_30b": {
@@ -228,9 +244,9 @@ MODELS = {
         "name": "GPT-OSS 20B",
         "model_id": "openai/gpt-oss-20b:free",
         "description": "OpenAI GPT-OSS 20B с открытыми весами. Молниеносный и бесплатный.",
-        "emoji": "🧠",
-        "emoji_html": pe("5805553606635559688", "🧠"),
-        "emoji_id": "5805553606635559688",
+        "emoji": PE_BRAIN,
+        "emoji_html": PE_BRAIN,
+        "emoji_id": EMOJI_BRAIN_ID,
         "provider": "openrouter",
     },
     "or_nemotron_9b": {
@@ -238,8 +254,8 @@ MODELS = {
         "model_id": "nvidia/nemotron-nano-9b-v2:free",
         "description": "Лёгкая 9B модель NVIDIA. Максимально быстрая для простых задач.",
         "emoji": "⚡",
-        "emoji_html": pe("5323761960829862762", "⚡️"),
-        "emoji_id": "5323761960829862762",
+        "emoji_html": PE_LIGHTNING,
+        "emoji_id": EMOJI_LIGHTNING_ID,
         "provider": "openrouter",
     },
 }
@@ -856,7 +872,7 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="🤖 Модель"), KeyboardButton(text="🎭 Роль")],
         [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🗑 Новый диалог")],
-        [KeyboardButton(text="🎨 Нейро-фото"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="Нейро-фото", icon_custom_emoji_id=EMOJI_ART_ID), KeyboardButton(text="👤 Профиль")],
         [KeyboardButton(text="ℹ️ Помощь")],
     ]
     if user_id == ADMIN_ID:
@@ -901,7 +917,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
 
     # ── Models grouped by provider ────────────────────────────────────────────
     PROVIDER_GROUPS = [
-        ("groq",       "⚡️ GROQ"),
+        ("groq",       "GROQ"),
         ("sambanova",  "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
     ]
@@ -1091,7 +1107,7 @@ async def cmd_start(message: Message):
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
         f"Я — <b>Zeno AI</b> — твой личный ИИ-ассистент с доступом к мощным языковым моделям.\n\n"
         f"🤖 Отвечаю на любые вопросы\n"
-        f"🎨 Рисую картинки по описанию\n"
+        f"{PE_ART} Рисую картинки по описанию\n"
         f"👁 Анализирую фотографии\n"
         f"🎭 Меняю роли и стиль общения\n\n"
         f"📌 <b>Сейчас активно:</b>\n"
@@ -1132,7 +1148,7 @@ async def cmd_help(message: Message):
         f"{pe('6032625495328165724', '🎭')} <b>Роли:</b>\n{roles_text}\n\n"
         "⚙️ <b>Настройки</b> — регулировка температуры ответа\n"
         "🗑 <b>Новый диалог</b> — сбросить историю\n"
-        "🎨 <b>Нейро-фото</b> — генерация картинок по описанию\n"
+        f"{PE_ART} <b>Нейро-фото</b> — генерация картинок по описанию\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
         "👤 <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
         "🎁 <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
@@ -1243,20 +1259,20 @@ async def cmd_profile(message: Message):
     text = (
         f"{'👑' if vip else '👤'} <b>Профиль</b>{vip_line}\n\n"
         f"👤 Имя: <b>{profile['first_name']}</b>\n"
-        f"🔗 Username: <b>{username_str}</b>\n"
-        f"🆔 ID: <code>{profile['user_id']}</code>\n\n"
+        f"{PE_LINK} Username: <b>{username_str}</b>\n"
+        f"{PE_ID} ID: <code>{profile['user_id']}</code>\n\n"
         f"🪙 <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n"
         f"🎟 <b>Генерации: {free_gens}</b>\n\n"
         f"💬 Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
         f"📅 Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
-        f"🕐 Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
+        f"{PE_CLOCK} Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
         f"🤖 Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
         f"🎭 Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
     )
     if vip:
         text += (
             "\n\n👑 <b>VIP-привилегии:</b>\n"
-            "• 🎨 Генерации изображений бесплатны\n"
+            f"• {PE_ART} Генерации изображений бесплатны\n"
             "• 🤖 Все платные модели бесплатны\n"
             "• ⚡ Антиспам вдвое мягче"
         )
@@ -1355,7 +1371,7 @@ async def cb_admin_users(callback: CallbackQuery):
         uname = f"@{u['username']}" if u.get("username") else f"id{u['user_id']}"
         lines.append(
             f"• <b>{u['first_name']}</b> ({uname})\n"
-            f"  🪙 {u.get('zenotoken', 0)} | 💬 {u.get('messages_count', 0)} | 🕐 {u.get('last_seen', '—')}"
+            f"  🪙 {u.get('zenotoken', 0)} | 💬 {u.get('messages_count', 0)} | {PE_CLOCK} {u.get('last_seen', '—')}"
         )
     text = f"👥 <b>Последние {len(recent)} пользователей:</b>\n\n" + "\n\n".join(lines)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1905,12 +1921,12 @@ async def fsm_give_user(message: Message, state: FSMContext):
         text = (
             f"🔍 <b>Профиль пользователя</b>\n\n"
             f"👤 Имя: <b>{found['first_name']}</b>\n"
-            f"🔗 Username: <b>{uname}</b>\n"
-            f"🆔 ID: <code>{found['user_id']}</code>\n"
+            f"{PE_LINK} Username: <b>{uname}</b>\n"
+            f"{PE_ID} ID: <code>{found['user_id']}</code>\n"
             f"🪙 ZenoToken: <b>{found.get('zenotoken', 0)}</b>\n"
             f"💬 Сообщений: <b>{found.get('messages_count', 0)}</b>\n"
             f"📅 Регистрация: <b>{found.get('joined_at', '—')}</b>\n"
-            f"🕐 Последняя активность: <b>{found.get('last_seen', '—')}</b>"
+            f"{PE_CLOCK} Последняя активность: <b>{found.get('last_seen', '—')}</b>"
         )
         give_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🪙 Выдать токены", callback_data=f"admin:give_to:{found['user_id']}")],
@@ -2158,7 +2174,7 @@ async def cb_open_model(callback: CallbackQuery):
 # ─── /img — Image generation ──────────────────────────────────────────────────
 
 IMG_WELCOME_TEXT = (
-    "🎨 <b>Генератор изображений</b>\n\n"
+    f"{PE_ART} <b>Генератор изображений</b>\n\n"
     "Я создам картинку по вашему описанию с помощью нейросети Pollinations AI.\n\n"
     "✦ Чем подробнее описание — тем лучше результат.\n"
     "✦ Можно писать на русском или английском."
@@ -2170,7 +2186,7 @@ IMG_WELCOME_TEXT = (
 async def cmd_img(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Ввести описание", callback_data="img:prompt")]
+        [InlineKeyboardButton(text="Ввести описание", callback_data="img:prompt", icon_custom_emoji_id=EMOJI_EDIT_ID)]
     ])
     text = IMG_WELCOME_TEXT + img_gen_info_text(message.from_user.id)
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -2181,7 +2197,7 @@ async def cb_img_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ImgStates.waiting_prompt)
     await state.update_data(img_msg_id=callback.message.message_id)
     await callback.message.edit_text(
-        "✏️ <b>Что рисуем?</b>\n\n"
+        f"{PE_EDIT} <b>Что рисуем?</b>\n\n"
         "Напишите описание картинки — чем подробнее, тем лучше результат.\n\n"
         "<i>Пример: закат над горами, в стиле аниме, яркие цвета</i>",
         parse_mode=ParseMode.HTML,
@@ -2206,7 +2222,7 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Создать картинку", callback_data="img:generate", style="success")],
-        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")],
+        [InlineKeyboardButton(text="Промт", callback_data="img:prompt", icon_custom_emoji_id=EMOJI_EDIT_ID)],
     ])
     text = (
         f"{IMG_WELCOME_TEXT}\n\n"
@@ -2274,7 +2290,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
             )
             return
 
-    await callback.answer("🎨 Создаю...")
+    await callback.answer("Создаю...")
     await callback.message.edit_text(
         f"⏳ <b>Перевожу описание...</b>\n\n<i>{prompt}</i>",
         parse_mode=ParseMode.HTML
@@ -2286,7 +2302,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Img prompt translated: '{prompt}' -> '{english_prompt}'")
 
         await callback.message.edit_text(
-            f"🎨 <b>Отправляю в очередь...</b>\n\n<i>{prompt}</i>",
+            f"{PE_ART} <b>Отправляю в очередь...</b>\n\n<i>{prompt}</i>",
             parse_mode=ParseMode.HTML
         )
 
@@ -2348,7 +2364,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 queue_pos = check.get("queue_position", "?")
                 try:
                     await callback.message.edit_text(
-                        f"🎨 <b>Рисую...</b>\n\n"
+                        f"{PE_ART} <b>Рисую...</b>\n\n"
                         f"<i>{prompt}</i>\n\n"
                         f"⏱ ~{wait_time}с · позиция в очереди: {queue_pos}",
                         parse_mode=ParseMode.HTML,
@@ -2393,13 +2409,13 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         photo = BufferedInputFile(img_bytes, filename="image.png")
         await callback.message.answer_photo(
             photo,
-            caption=f"🎨 <i>{prompt}</i>",
+            caption=f"{PE_ART} <i>{prompt}</i>",
             parse_mode=ParseMode.HTML,
         )
 
         kb_menu = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎨 Создать ещё", callback_data="img:generate", style="success")],
-            [InlineKeyboardButton(text="✏️ Изменить промт", callback_data="img:prompt", style="primary")],
+            [InlineKeyboardButton(text="Создать ещё", callback_data="img:generate", style="success", icon_custom_emoji_id=EMOJI_ART_ID)],
+            [InlineKeyboardButton(text="Изменить промт", callback_data="img:prompt", style="primary", icon_custom_emoji_id=EMOJI_EDIT_ID)],
         ])
         await callback.message.edit_text(
             f"{IMG_WELCOME_TEXT}{img_gen_info_text(user_id)}\n\n<b>Последний промт:</b>\n<i>{prompt}</i>",
@@ -2411,7 +2427,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Image gen error: {e}")
         kb_err = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="img:generate", style="primary")],
-            [InlineKeyboardButton(text="✏️ Новый промт", callback_data="img:prompt")],
+            [InlineKeyboardButton(text="Новый промт", callback_data="img:prompt", icon_custom_emoji_id=EMOJI_EDIT_ID)],
         ])
         await callback.message.edit_text(
             "❌ <b>Не удалось создать картинку.</b>\n\n"
@@ -2425,7 +2441,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 async def cb_img_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Промт", callback_data="img:prompt")]
+        [InlineKeyboardButton(text="Промт", callback_data="img:prompt", icon_custom_emoji_id=EMOJI_EDIT_ID)]
     ])
     await callback.message.edit_text(IMG_WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb)
     await callback.answer("Отменено")
@@ -3023,7 +3039,7 @@ def admin_case_actions_keyboard(case_id: str) -> InlineKeyboardMarkup:
         b.style = style
         return b
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("✏️ Изменить название", f"acase:rename:{case_id}")],
+        [_btn("Изменить название", f"acase:rename:{case_id}", emoji_id=EMOJI_EDIT_ID)],
         [_btn("🔢 Изменить количество", f"acase:settotal:{case_id}")],
         [_btn("👤 Изменить лимит на пользователя", f"acase:setlimit:{case_id}")],
         [_btn("🗑 Удалить кейс", f"acase:delete:{case_id}", "danger")],
@@ -3341,7 +3357,7 @@ async def cb_acase_rename(callback: CallbackQuery, state: FSMContext):
     await state.update_data(edit_case_id=case_id, edit_case_field="name")
     await state.set_state(CaseStates.waiting_case_name)
     await callback.message.edit_text(
-        "✏️ Введите новое <b>название</b> кейса:",
+        f"{PE_EDIT} Введите новое <b>название</b> кейса:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"acase:edit:{case_id}", style="danger")]
