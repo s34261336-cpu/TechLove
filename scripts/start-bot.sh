@@ -13,6 +13,20 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
   if git remote get-url origin >/dev/null 2>&1; then
     if git fetch --quiet --prune origin main; then
       if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+        runtime_backup_dir="$(mktemp -d)"
+        runtime_files=(
+          "users_data.json"
+          "models_data.json"
+          "cases_data.json"
+          "reminders_data.json"
+          "media_data.json"
+        )
+        for runtime_file in "${runtime_files[@]}"; do
+          if [[ -f "$runtime_file" ]]; then
+            cp -p "$runtime_file" "$runtime_backup_dir/$runtime_file"
+          fi
+        done
+
         # Never overwrite local changes. BotHost can restart and retry after
         # the working tree has been made clean.
         if git diff --quiet -- . \
@@ -27,12 +41,21 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
           ':(exclude)cases_data.json' \
           ':(exclude)reminders_data.json' \
           ':(exclude)media_data.json'; then
-          git merge --ff-only origin/main
-          log "Код обновлён до $(git rev-parse --short HEAD)."
+          if git merge --ff-only origin/main; then
+            for runtime_file in "${runtime_files[@]}"; do
+              if [[ -f "$runtime_backup_dir/$runtime_file" ]]; then
+                cp -p "$runtime_backup_dir/$runtime_file" "$runtime_file"
+              fi
+            done
+            log "Код обновлён до $(git rev-parse --short HEAD); локальные данные сохранены."
+          else
+            log "Автосинхронизация пропущена: локальная ветка содержит отдельные изменения."
+          fi
         else
           log "Обновление пропущено: есть локальные изменения."
           log "Сначала сохраните их коммитом, затем перезапустите бота."
         fi
+        rm -rf "$runtime_backup_dir"
       else
         log "Код уже актуален: $(git rev-parse --short HEAD)."
       fi

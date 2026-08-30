@@ -14,6 +14,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
+from contextlib import asynccontextmanager
 import aiohttp
 from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 from io import BytesIO
@@ -39,6 +40,62 @@ from aiogram.exceptions import TelegramBadRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+
+JSON_WRITE_LOCK = threading.RLock()
+_http_session: aiohttp.ClientSession | None = None
+_http_session_loop: asyncio.AbstractEventLoop | None = None
+HTTP_DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=25)
+
+
+@asynccontextmanager
+async def shared_http_session():
+    """Reuse one connection pool for outbound API requests."""
+    global _http_session, _http_session_loop
+    loop = asyncio.get_running_loop()
+    if (
+        _http_session is None
+        or _http_session.closed
+        or _http_session_loop is not loop
+    ):
+        if _http_session is not None and not _http_session.closed:
+            await _http_session.close()
+        _http_session = aiohttp.ClientSession(timeout=HTTP_DEFAULT_TIMEOUT)
+        _http_session_loop = loop
+    yield _http_session
+
+
+async def close_shared_http_session() -> None:
+    global _http_session, _http_session_loop
+    if _http_session is not None and not _http_session.closed:
+        await _http_session.close()
+    _http_session = None
+    _http_session_loop = None
+
+
+def save_json_atomically(filename: str, data: Any) -> None:
+    """Write JSON atomically so interrupted writes cannot corrupt state."""
+    directory = os.path.dirname(filename) or "."
+    temp_path = None
+    with JSON_WRITE_LOCK:
+        try:
+            fd, temp_path = tempfile.mkstemp(
+                prefix=f".{os.path.basename(filename)}.",
+                suffix=".tmp",
+                dir=directory,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=2)
+                file.flush()
+            os.replace(temp_path, filename)
+        except Exception:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            raise
+
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
@@ -124,10 +181,7 @@ def load_media_settings() -> dict:
 
 
 def save_media_settings(data: dict) -> None:
-    temp_file = f"{MEDIA_FILE}.tmp"
-    with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-    os.replace(temp_file, MEDIA_FILE)
+    save_json_atomically(MEDIA_FILE, data)
 
 
 def get_media_file_id(block_key: str) -> str | None:
@@ -201,7 +255,7 @@ async def load_user_facts(user_id: int) -> list[str]:
         "limit": "40",
     }
     try:
-        async with aiohttp.ClientSession() as http:
+        async with shared_http_session() as http:
             async with http.get(
                 SUPABASE_FACTS_URL,
                 params=params,
@@ -229,7 +283,7 @@ async def save_user_fact(user_id: int, fact: str) -> None:
     }
     payload = {"user_id": user_id, "fact": fact, "source": "conversation"}
     try:
-        async with aiohttp.ClientSession() as http:
+        async with shared_http_session() as http:
             async with http.post(
                 SUPABASE_FACTS_URL,
                 json=payload,
@@ -290,7 +344,7 @@ async def save_state_snapshot(state_key: str, state_value: Any) -> None:
     }
     payload = {"state_key": state_key, "state_value": state_value}
     try:
-        async with aiohttp.ClientSession() as http:
+        async with shared_http_session() as http:
             async with http.post(
                 SUPABASE_STATE_URL,
                 json=payload,
@@ -323,7 +377,7 @@ async def load_state_snapshot(state_key: str) -> Any | None:
         return None
     params = {"state_key": f"eq.{state_key}", "select": "state_value", "limit": "1"}
     try:
-        async with aiohttp.ClientSession() as http:
+        async with shared_http_session() as http:
             async with http.get(
                 SUPABASE_STATE_URL,
                 params=params,
@@ -357,8 +411,7 @@ async def restore_state_snapshots() -> None:
         if state_value is None:
             continue
         try:
-            with open(filename, "w", encoding="utf-8") as state_file:
-                json.dump(state_value, state_file, ensure_ascii=False, indent=2)
+            save_json_atomically(filename, state_value)
             logger.info("Restored %s from Supabase", state_key)
         except (OSError, TypeError):
             logger.exception("Could not restore %s from Supabase", state_key)
@@ -373,7 +426,7 @@ async def save_session_snapshot(user_id: int, session_data: dict) -> None:
     }
     payload = {"user_id": user_id, "session_data": session_data}
     try:
-        async with aiohttp.ClientSession() as http:
+        async with shared_http_session() as http:
             async with http.post(
                 SUPABASE_SESSIONS_URL,
                 json=payload,
@@ -392,7 +445,7 @@ async def hydrate_user_session(user_id: int) -> None:
         return
     params = {"user_id": f"eq.{user_id}", "select": "session_data", "limit": "1"}
     try:
-        async with aiohttp.ClientSession() as http:
+        async with shared_http_session() as http:
             async with http.get(
                 SUPABASE_SESSIONS_URL,
                 params=params,
@@ -888,8 +941,7 @@ def load_users() -> dict:
     return {}
 
 def save_users(data: dict):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    save_json_atomically(USERS_FILE, data)
     schedule_state_snapshot("users", data)
 
 def get_user_profile(user_id: int, first_name: str = "", username: str = "") -> dict:
@@ -1049,8 +1101,7 @@ def load_reminders() -> list[dict]:
 
 
 def save_reminders(data: list[dict]):
-    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    save_json_atomically(REMINDERS_FILE, data)
     schedule_state_snapshot("reminders", data)
 
 
@@ -1251,8 +1302,7 @@ def load_restrictions() -> dict:
     return {}
 
 def save_restrictions(data: dict):
-    with open(MODELS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    save_json_atomically(MODELS_FILE, data)
     schedule_state_snapshot("restrictions", data)
 
 def get_model_restriction(model_key: str) -> dict | None:
@@ -1316,8 +1366,7 @@ def load_cases() -> dict:
     return {}
 
 def save_cases(data: dict):
-    with open(CASES_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    save_json_atomically(CASES_FILE, data)
     schedule_state_snapshot("cases", data)
 
 def get_all_cases() -> list:
@@ -1542,8 +1591,16 @@ def img_gen_info_text(user_id: int) -> str:
 
 user_sessions: dict[int, dict] = {}
 hydrated_sessions: set[int] = set()
+user_ai_locks: dict[int, asyncio.Lock] = {}
+_user_ai_locks_guard = threading.Lock()
 
 admin_test_mode: bool = False  # When True, admin is treated as a regular user
+
+
+def get_user_ai_lock(user_id: int) -> asyncio.Lock:
+    """Serialize AI calls per user so concurrent messages keep one history."""
+    with _user_ai_locks_guard:
+        return user_ai_locks.setdefault(user_id, asyncio.Lock())
 
 # ─── Maintenance mode ─────────────────────────────────────────────────────────
 maintenance: dict = {"active": False, "until_ts": None, "reason": ""}
@@ -3624,7 +3681,7 @@ async def enhance_image_prompt(prompt: str, is_hd: bool = False) -> str:
         "max_tokens": 300,
     }
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as session:
+    async with shared_http_session() as session:
         async with session.post(
             GROQ_API_URL, json=payload, headers=headers,
             timeout=aiohttp.ClientTimeout(total=15)
@@ -3657,7 +3714,7 @@ async def generate_flux_image(prompt: str, is_hd: bool = False) -> bytes:
         f"https://image.pollinations.ai/prompt/{encoded_prompt}"
         f"?model=flux&width={size}&height={size}&nologo=true&enhance=true"
     )
-    async with aiohttp.ClientSession() as session:
+    async with shared_http_session() as session:
         async with session.get(
             image_url,
             headers={"User-Agent": "ZenoAI:1.0:telegram-bot"},
@@ -3926,7 +3983,7 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
                 "slow_workers": True,
             }
 
-            async with aiohttp.ClientSession() as http:
+            async with shared_http_session() as http:
                 async with http.post(
                     f"{HORDE_URL}/generate/async",
                     json=horde_payload,
@@ -4116,7 +4173,7 @@ async def cb_img_home(callback: CallbackQuery, state: FSMContext):
 
 # ─── OpenAI-compatible AI APIs ────────────────────────────────────────────────
 
-async def call_ai(session: dict, user_message: str, user_id: int | None = None) -> str:
+async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | None = None) -> str:
     model_cfg = MODELS[session["model"]]
     model_id = model_cfg["model_id"]
 
@@ -4181,8 +4238,13 @@ async def call_ai(session: dict, user_message: str, user_id: int | None = None) 
         "Content-Type": "application/json",
     }
     try:
-        async with aiohttp.ClientSession() as http:
-            async with http.post(api_url, json=payload, headers=headers) as resp:
+        async with shared_http_session() as http:
+            async with http.post(
+                api_url,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=90, connect=10, sock_read=80),
+            ) as resp:
                 data = await resp.json()
         if "choices" not in data:
             err = data.get("error", {})
@@ -4205,6 +4267,14 @@ async def call_ai(session: dict, user_message: str, user_id: int | None = None) 
         # Restore history to pre-call state so broken exchange doesn't poison context
         session["history"] = history_snapshot
         raise
+
+
+async def call_ai(session: dict, user_message: str, user_id: int | None = None) -> str:
+    """Run one user's AI conversation at a time to prevent history races."""
+    if user_id is None:
+        return await _call_ai_unlocked(session, user_message, user_id)
+    async with get_user_ai_lock(user_id):
+        return await _call_ai_unlocked(session, user_message, user_id)
 
 
 def strip_tg_emoji(text: str) -> str:
@@ -4263,7 +4333,7 @@ async def describe_image(image_bytes: bytes, user_question: str | None = None) -
             "max_tokens": 1024,
         }
         try:
-            async with aiohttp.ClientSession() as http:
+            async with shared_http_session() as http:
                 async with http.post(
                     OPENROUTER_API_URL, json=payload, headers=headers,
                     timeout=aiohttp.ClientTimeout(total=40)
@@ -4828,7 +4898,7 @@ async def summarize_deep_search(query: str, sources: list[dict[str, str]]) -> st
         "Content-Type": "application/json",
     }
     last_error = "Groq не вернул отчёт"
-    async with aiohttp.ClientSession() as http:
+    async with shared_http_session() as http:
         for model_id in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
             try:
                 async with http.post(
@@ -4891,7 +4961,7 @@ async def summarize_search_results(query: str, results: list[dict[str, str]]) ->
 
     summary = ""
     last_error = "Groq не вернул ответ"
-    async with aiohttp.ClientSession() as http:
+    async with shared_http_session() as http:
         for model_id in search_summary_models:
             payload = {**request_payload, "model": model_id}
             try:
@@ -5970,6 +6040,7 @@ async def main():
         except asyncio.CancelledError:
             pass
         logger.info("Останавливаю бота, закрываю сессию...")
+        await close_shared_http_session()
         await bot.session.close()
         logger.info("Сессия закрыта.")
 
