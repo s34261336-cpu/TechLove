@@ -34,5 +34,13 @@
     "opened_by": {
       "5814345235": 1
     }
+  },
+  "case_1788199550": {
+    "id": "case_1788199550",
+    "name": "2",
+    "total_count": 0,
+    "per_user_limit": 2,
+    "opened_count": 0,
+    "opened_by": {}
   }
 }
