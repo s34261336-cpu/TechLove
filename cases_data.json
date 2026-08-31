@@ -16,5 +16,23 @@
     "per_user_limit": 1,
     "opened_count": 0,
     "opened_by": {}
+  },
+  "case_1788199312": {
+    "id": "case_1788199312",
+    "name": "TestE",
+    "total_count": 0,
+    "per_user_limit": 1,
+    "opened_count": 0,
+    "opened_by": {}
+  },
+  "case_1788199369": {
+    "id": "case_1788199369",
+    "name": "1",
+    "total_count": 1,
+    "per_user_limit": 1,
+    "opened_count": 1,
+    "opened_by": {
+      "5814345235": 1
+    }
   }
 }

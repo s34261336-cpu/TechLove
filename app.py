@@ -4647,7 +4647,11 @@ async def fsm_case_total(message: Message, state: FSMContext):
         if c and was_available and case_remaining(c) == 0:
             await notify_case_channel(
                 message.bot,
-                case_finished_notification(c, "количество изменено администратором"),
+                case_finished_notification(
+                    c,
+                    "Пользователи открыли все доступные кейсы",
+                    all_opened=True,
+                ),
             )
         await message.answer(
             f"✅ Общее количество обновлено: <b>{total}</b>",
