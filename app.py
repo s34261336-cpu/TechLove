@@ -1425,13 +1425,17 @@ def case_created_notification(case: dict) -> str:
         f"Лимит на пользователя: <b>{case['per_user_limit']}</b>"
     )
 
-def case_finished_notification(case: dict, reason: str) -> str:
+def case_finished_notification(
+    case: dict,
+    reason: str,
+    all_opened: bool = False,
+) -> str:
+    opened_text = "всё" if all_opened else str(case["opened_count"])
     return (
         "🔴 <b>Кейс закончился</b>\n\n"
         f"Название: <b>{html_escape(str(case['name']))}</b>\n"
         f"Причина: {reason}\n"
-        f"Открыто: <b>{case['opened_count']}</b>\n"
-        f"Осталось: <b>{case_remaining(case)}</b>"
+        f"Открыто: <b>{opened_text}</b>"
     )
 
 def get_all_cases() -> list:
@@ -5913,7 +5917,11 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
         if finished_case:
             await notify_case_channel(
                 bot,
-                case_finished_notification(finished_case, "все доступные открытия использованы"),
+                case_finished_notification(
+                    finished_case,
+                    "Пользователи открыли все доступные кейсы",
+                    all_opened=True,
+                ),
             )
 
     # Build post-apply balance line
