@@ -127,6 +127,8 @@ ADMIN_ID = 5814345235
 USERS_FILE = "users_data.json"
 MODELS_FILE = "models_data.json"
 CASES_FILE = "cases_data.json"
+CASE_CHANNEL_SETTINGS_FILE = "case_channel_settings.json"
+DEFAULT_CASE_CHANNEL_ID = -1004392194689
 REMINDERS_FILE = "reminders_data.json"
 MEDIA_FILE = "media_data.json"
 DEFAULT_MAIN_IMAGE = "attached_assets/IMG_20260810_101608_213_1787023992393.jpg"
@@ -1383,16 +1385,74 @@ def save_cases(data: dict):
     save_json_atomically(CASES_FILE, data)
     schedule_state_snapshot("cases", data)
 
+def case_remaining(case: dict) -> int:
+    """Return a non-negative number of opens left for a case."""
+    return max(0, case["total_count"] - case["opened_count"])
+
+def load_case_channel_id() -> int:
+    """Load the channel used for case notifications."""
+    if os.path.exists(CASE_CHANNEL_SETTINGS_FILE):
+        try:
+            with open(CASE_CHANNEL_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            value = data.get("channel_id") if isinstance(data, dict) else None
+            channel_id = int(value)
+            if channel_id != 0:
+                return channel_id
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("Не удалось прочитать ID канала уведомлений кейсов")
+    return DEFAULT_CASE_CHANNEL_ID
+
+def save_case_channel_id(channel_id: int) -> None:
+    save_json_atomically(CASE_CHANNEL_SETTINGS_FILE, {"channel_id": channel_id})
+
+async def notify_case_channel(bot: Bot, text: str) -> None:
+    """Send a case lifecycle notification without breaking the user flow."""
+    try:
+        await bot.send_message(
+            chat_id=load_case_channel_id(),
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as exc:
+        logger.warning("Не удалось отправить уведомление о кейсе в канал: %s", exc)
+
+def case_created_notification(case: dict) -> str:
+    return (
+        "📦 <b>Создан новый кейс</b>\n\n"
+        f"Название: <b>{html_escape(str(case['name']))}</b>\n"
+        f"Количество: <b>{case['total_count']}</b>\n"
+        f"Лимит на пользователя: <b>{case['per_user_limit']}</b>"
+    )
+
+def case_finished_notification(case: dict, reason: str) -> str:
+    return (
+        "🔴 <b>Кейс закончился</b>\n\n"
+        f"Название: <b>{html_escape(str(case['name']))}</b>\n"
+        f"Причина: {reason}\n"
+        f"Открыто: <b>{case['opened_count']}</b>\n"
+        f"Осталось: <b>{case_remaining(case)}</b>"
+    )
+
 def get_all_cases() -> list:
     """Return list of all case dicts."""
-    return list(load_cases().values())
+    return [
+        case
+        for case in load_cases().values()
+        if isinstance(case, dict)
+        and "id" in case
+        and "total_count" in case
+        and "opened_count" in case
+    ]
 
 def get_available_cases() -> list:
     """Return cases that still have remaining opens."""
     cases = load_cases()
     result = []
     for c in cases.values():
-        remaining = c["total_count"] - c["opened_count"]
+        if not isinstance(c, dict) or "total_count" not in c or "opened_count" not in c:
+            continue
+        remaining = case_remaining(c)
         if remaining > 0:
             result.append(c)
     return result
@@ -1430,7 +1490,7 @@ def can_user_open_case(case_id: str, user_id: int) -> tuple[bool, str]:
     c = data.get(case_id)
     if not c:
         return False, "Кейс не найден."
-    remaining = c["total_count"] - c["opened_count"]
+    remaining = case_remaining(c)
     if remaining <= 0:
         return False, "Все кейсы уже разобраны. Следи за обновлениями!"
     uid = str(user_id)
@@ -1439,14 +1499,16 @@ def can_user_open_case(case_id: str, user_id: int) -> tuple[bool, str]:
         return False, f"Ты уже открывал этот кейс {user_opens} раз(а). Лимит: {c['per_user_limit']}."
     return True, ""
 
-def record_case_open(case_id: str, user_id: int):
+def record_case_open(case_id: str, user_id: int) -> bool:
     data = load_cases()
     if case_id not in data:
-        return
+        return False
     uid = str(user_id)
     data[case_id]["opened_count"] += 1
     data[case_id]["opened_by"][uid] = data[case_id]["opened_by"].get(uid, 0) + 1
+    finished = case_remaining(data[case_id]) == 0
     save_cases(data)
+    return finished
 
 
 # ─── Cases: prizes ────────────────────────────────────────────────────────────
@@ -1680,6 +1742,7 @@ class AdminStates(StatesGroup):
     waiting_img_gen_price = State()
     waiting_video_gen_price = State()
     waiting_prize_weight = State()
+    waiting_case_channel_id = State()
 
 
 class ImgStates(StatesGroup):
@@ -2005,10 +2068,31 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [_btn("Цена фото", "admin:imgprice", emoji_id=EMOJI_IMAGE_ID),
          _btn("Цена видео", "admin:videoprice", emoji_id=EMOJI_VIDEO_ID)],
         [_btn("Фото блоков", "admin:media", emoji_id=EMOJI_IMAGE_ID)],
-        [_btn("Управление кейсами", "admin:cases", emoji_id=EMOJI_GIFT_ID)],
+        [_btn("Управление кейсами", "admin:cases", emoji_id=EMOJI_GIFT_ID),
+         _btn("📣 Канал кейсов", "admin:case_channel")],
         [_btn(test_label, "admin:testmode", test_style)],
         [_btn(maint_label, "admin:maintenance", maint_style)],
     ])
+
+
+def admin_case_channel_text() -> str:
+    return (
+        "📣 <b>Канал уведомлений кейсов</b>\n\n"
+        f"Текущий ID канала: <code>{load_case_channel_id()}</code>\n\n"
+        "Сюда будут приходить уведомления о создании кейса и о его завершении.\n"
+        "Для изменения нажмите кнопку ниже и отправьте числовой ID канала."
+    )
+
+
+def admin_case_channel_keyboard() -> InlineKeyboardMarkup:
+    change_button = InlineKeyboardButton(
+        text="Изменить ID канала",
+        callback_data="admin:case_channel:set",
+    )
+    change_button.style = "primary"
+    back_button = InlineKeyboardButton(text="◀️ В панель", callback_data="admin:back")
+    back_button.style = "primary"
+    return InlineKeyboardMarkup(inline_keyboard=[[change_button], [back_button]])
 
 
 def admin_media_text() -> str:
@@ -2496,6 +2580,62 @@ async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
     await callback.answer("Отменено")
+
+
+# ─── Admin: case notification channel ────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:case_channel")
+async def cb_admin_case_channel(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        admin_case_channel_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_case_channel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:case_channel:set")
+async def cb_admin_case_channel_set(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_case_channel_id)
+    await callback.message.edit_text(
+        "📣 <b>Новый канал уведомлений кейсов</b>\n\n"
+        "Отправьте числовой ID канала, например:\n"
+        "<code>-1004392194689</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_case_channel_id)
+async def fsm_admin_case_channel_id(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        channel_id = int((message.text or "").strip())
+        if channel_id == 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Введите корректный числовой ID канала, например <code>-1004392194689</code>:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_cancel_keyboard(),
+        )
+        return
+
+    save_case_channel_id(channel_id)
+    await state.clear()
+    await message.answer(
+        f"✅ Канал уведомлений кейсов изменён на <code>{channel_id}</code>.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_case_channel_keyboard(),
+    )
 
 
 # ─── Admin: section photos ────────────────────────────────────────────────────
@@ -4477,21 +4617,34 @@ async def fsm_case_name(message: Message, state: FSMContext):
 async def fsm_case_total(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
+    data = await state.get_data()
     try:
         total = int(message.text.strip())
-        if total <= 0:
+        is_edit = data.get("edit_case_field") == "total_count"
+        if total < 0 or (not is_edit and total == 0):
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите целое положительное число:")
+        prompt = (
+            "❌ Введите целое число от 0 и выше:"
+            if data.get("edit_case_field") == "total_count"
+            else "❌ Введите целое положительное число:"
+        )
+        await message.answer(prompt)
         return
-    data = await state.get_data()
     # Edit mode: update total_count
     if data.get("edit_case_field") == "total_count":
         case_id = data["edit_case_id"]
+        previous_case = load_cases().get(case_id)
+        was_available = bool(previous_case and case_remaining(previous_case) > 0)
         update_case(case_id, total_count=total)
         await state.clear()
         cases_data = load_cases()
         c = cases_data.get(case_id, {})
+        if c and was_available and case_remaining(c) == 0:
+            await notify_case_channel(
+                message.bot,
+                case_finished_notification(c, "количество изменено администратором"),
+            )
         await message.answer(
             f"✅ Общее количество обновлено: <b>{total}</b>",
             parse_mode=ParseMode.HTML,
@@ -4538,6 +4691,7 @@ async def fsm_case_limit(message: Message, state: FSMContext):
     # Create mode: step 3/3 — finish creation
     await state.clear()
     case = create_case(data["case_name"], data["case_total"], limit)
+    await notify_case_channel(message.bot, case_created_notification(case))
     await message.answer(
         f"✅ <b>Кейс создан!</b>\n\n"
         f"{PE_GIFT} Название: <b>{case['name']}</b>\n"
@@ -5473,7 +5627,7 @@ def progress_bar(current: int, total: int, length: int = 8) -> str:
 def cases_list_keyboard(cases: list) -> InlineKeyboardMarkup:
     rows = []
     for c in cases:
-        remaining = c["total_count"] - c["opened_count"]
+        remaining = case_remaining(c)
         pct = int(remaining / c["total_count"] * 100) if c["total_count"] else 0
         bar = progress_bar(remaining, c["total_count"], 6)
         rows.append([InlineKeyboardButton(
@@ -5493,7 +5647,7 @@ def admin_cases_keyboard() -> InlineKeyboardMarkup:
     cases = get_all_cases()
     rows = []
     for c in cases:
-        remaining = c["total_count"] - c["opened_count"]
+        remaining = case_remaining(c)
         btn = InlineKeyboardButton(
             text=f"{c['name']} ({remaining}/{c['total_count']})",
             callback_data=f"acase:edit:{c['id']}",
@@ -5610,7 +5764,7 @@ async def cb_cases_list(callback: CallbackQuery, bot: Bot):
 
     lines = ["📦 <b>З О Н А  К Е Й С О В</b>", "", "━━━━━━━━━━━━━━━━━━━"]
     for c in cases:
-        remaining = c["total_count"] - c["opened_count"]
+        remaining = case_remaining(c)
         bar = progress_bar(remaining, c["total_count"], 8)
         lines.append(f"  {bar}  <b>{c['name']}</b> — {remaining} шт.")
     lines += [
@@ -5649,7 +5803,7 @@ async def cb_case_view(callback: CallbackQuery, bot: Bot):
     if not c:
         await callback.answer("Кейс не найден.", show_alert=True)
         return
-    remaining = c["total_count"] - c["opened_count"]
+    remaining = case_remaining(c)
     uid = str(callback.from_user.id)
     user_opens = c["opened_by"].get(uid, 0)
     opens_left = c["per_user_limit"] - user_opens
@@ -5752,8 +5906,15 @@ async def cb_case_open(callback: CallbackQuery, bot: Bot):
         pass
 
     # Apply prize & record
-    record_case_open(case_id, user_id)
+    case_finished = record_case_open(case_id, user_id)
     apply_prize(user_id, prize)
+    if case_finished:
+        finished_case = load_cases().get(case_id)
+        if finished_case:
+            await notify_case_channel(
+                bot,
+                case_finished_notification(finished_case, "все доступные открытия использованы"),
+            )
 
     # Build post-apply balance line
     profile = get_user_profile(user_id)
@@ -5848,7 +6009,7 @@ async def cb_acase_edit(callback: CallbackQuery):
     if not c:
         await callback.answer("Кейс не найден.", show_alert=True)
         return
-    remaining = c["total_count"] - c["opened_count"]
+    remaining = case_remaining(c)
     await callback.message.edit_text(
         f"{PE_GIFT} <b>{c['name']}</b>\n\n"
         f"📦 Всего: {c['total_count']} | Открыто: {c['opened_count']} | Осталось: {remaining}\n"
