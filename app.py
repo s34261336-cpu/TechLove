@@ -519,6 +519,17 @@ async def answer_and_track(
     """Send a text reply and index it for a possible heart reaction."""
     sent = await message.answer(text, **kwargs)
     if sent.text:
+        # Put the source in the in-process cache before yielding again. This
+        # removes the small race where a user reacts immediately after the
+        # reply appears and the background Supabase write has not started yet.
+        remember_message_source(
+            sent.chat.id,
+            sent.message_id,
+            sent.text,
+            "bot",
+            message.from_user.id if message.from_user else None,
+            sent.date,
+        )
         asyncio.create_task(
             save_message_source(
                 sent.chat.id,
@@ -529,6 +540,36 @@ async def answer_and_track(
                 sent.date,
             )
         )
+
+        # Telegram does not deliver message_reaction updates in private
+        # chats because a bot cannot be an administrator there. Add a direct
+        # fallback button so saving still works in the usual bot chat.
+        favorite_rows = [[
+            InlineKeyboardButton(
+                text="❤️ Сохранить ответ",
+                callback_data=f"favorite:{sent.chat.id}:{sent.message_id}",
+            )
+        ]]
+        if message.text and message.message_id != sent.message_id:
+            favorite_rows.append([InlineKeyboardButton(
+                text="❤️ Сохранить мой запрос",
+                callback_data=f"favorite:{message.chat.id}:{message.message_id}",
+            )])
+
+        existing_markup = kwargs.get("reply_markup")
+        if isinstance(existing_markup, InlineKeyboardMarkup):
+            favorite_markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    *existing_markup.inline_keyboard,
+                    *favorite_rows,
+                ]
+            )
+        else:
+            favorite_markup = InlineKeyboardMarkup(inline_keyboard=favorite_rows)
+        try:
+            await sent.edit_reply_markup(reply_markup=favorite_markup)
+        except Exception as exc:
+            logger.warning("Favorite button could not be added: %s", exc)
     return sent
 
 
@@ -2063,6 +2104,14 @@ class AntiSpamMiddleware(BaseMiddleware):
         if isinstance(event, Message):
             user_id = event.from_user.id
             if event.text and event.from_user:
+                remember_message_source(
+                    event.chat.id,
+                    event.message_id,
+                    event.text,
+                    "user",
+                    event.from_user.id,
+                    event.date,
+                )
                 asyncio.create_task(
                     save_message_source(
                         event.chat.id,
@@ -5636,6 +5685,14 @@ async def handle_message_reaction(event: MessageReactionUpdated):
     """Save the reacted message when a user adds a heart."""
     if not event.user:
         return
+    logger.info(
+        "Reaction update: user=%s chat=%s message=%s old=%s new=%s",
+        event.user.id,
+        event.chat.id,
+        event.message_id,
+        event.old_reaction,
+        event.new_reaction,
+    )
     if not has_heart_reaction(event.new_reaction):
         return
     if has_heart_reaction(event.old_reaction):
@@ -5654,7 +5711,45 @@ async def handle_message_reaction(event: MessageReactionUpdated):
         )
         return
 
-    await save_favorite(event.user.id, source)
+    if await save_favorite(event.user.id, source):
+        logger.info(
+            "Favorite saved from reaction: user=%s chat=%s message=%s",
+            event.user.id,
+            event.chat.id,
+            event.message_id,
+        )
+
+
+@router.callback_query(F.data.startswith("favorite:"))
+async def callback_save_favorite(callback: CallbackQuery):
+    """Private-chat fallback for Telegram reactions."""
+    try:
+        _, chat_id, message_id = (callback.data or "").split(":", 2)
+        chat_id_int = int(chat_id)
+        message_id_int = int(message_id)
+    except (AttributeError, ValueError):
+        await callback.answer("Не удалось определить сообщение.", show_alert=True)
+        return
+
+    source = await load_message_source(
+        chat_id_int,
+        message_id_int,
+        callback.from_user.id,
+    )
+    if not source:
+        await callback.answer(
+            "Текст сообщения ещё не загружен. Попробуйте нажать ещё раз.",
+            show_alert=True,
+        )
+        return
+
+    if await save_favorite(callback.from_user.id, source):
+        await callback.answer("❤️ Сохранено в избранное")
+    else:
+        await callback.answer(
+            "Не удалось сохранить. Попробуйте ещё раз позже.",
+            show_alert=True,
+        )
 
 
 # ─── Reminders and message handler ────────────────────────────────────────────
@@ -5670,8 +5765,8 @@ async def cmd_favorites(message: Message):
     if not favorites:
         await message.answer(
             "❤️ <b>Избранное пока пусто.</b>\n\n"
-            "Поставьте реакцию ❤️ на своё сообщение или ответ бота, "
-            "чтобы сохранить текст.",
+            "Поставьте реакцию ❤️ или нажмите кнопку "
+            "«Сохранить» на своём сообщении или ответе бота.",
             parse_mode=ParseMode.HTML,
         )
         return
