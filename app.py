@@ -251,6 +251,14 @@ def supabase_headers() -> dict[str, str]:
     }
 
 
+async def supabase_error_details(response: aiohttp.ClientResponse) -> str:
+    try:
+        details = await response.text()
+        return details[:500]
+    except Exception:
+        return "не удалось прочитать тело ответа"
+
+
 def remember_message_source(
     chat_id: int,
     message_id: int,
@@ -316,9 +324,11 @@ async def save_message_source(
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as response:
                 if response.status >= 400:
+                    details = await supabase_error_details(response)
                     logger.warning(
-                        "Supabase message source save failed: HTTP %s",
+                        "Supabase message source save failed: HTTP %s: %s",
                         response.status,
+                        details,
                     )
     except Exception as exc:
         logger.warning("Supabase message source save failed: %s", exc)
@@ -347,9 +357,11 @@ async def load_message_source(chat_id: int, message_id: int) -> dict | None:
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as response:
                 if response.status >= 400:
+                    details = await supabase_error_details(response)
                     logger.warning(
-                        "Supabase message source read failed: HTTP %s",
+                        "Supabase message source read failed: HTTP %s: %s",
                         response.status,
+                        details,
                     )
                     return None
                 data = await response.json()
@@ -393,9 +405,11 @@ async def save_favorite(
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as response:
                 if response.status >= 400:
+                    details = await supabase_error_details(response)
                     logger.warning(
-                        "Supabase favorite save failed: HTTP %s",
+                        "Supabase favorite save failed: HTTP %s: %s",
                         response.status,
+                        details,
                     )
                     return False
         return True
@@ -423,7 +437,12 @@ async def load_favorites(user_id: int) -> list[dict] | None:
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as response:
                 if response.status >= 400:
-                    logger.warning("Supabase favorites read failed: HTTP %s", response.status)
+                    details = await supabase_error_details(response)
+                    logger.warning(
+                        "Supabase favorites read failed: HTTP %s: %s",
+                        response.status,
+                        details,
+                    )
                     return None
                 data = await response.json()
         return [item for item in data if isinstance(item, dict) and item.get("text")]
@@ -450,9 +469,11 @@ async def delete_favorite(user_id: int, favorite_id: int) -> bool:
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as response:
                 if response.status >= 400:
+                    details = await supabase_error_details(response)
                     logger.warning(
-                        "Supabase favorite delete failed: HTTP %s",
+                        "Supabase favorite delete failed: HTTP %s: %s",
                         response.status,
+                        details,
                     )
                     return False
                 deleted = await response.json()
