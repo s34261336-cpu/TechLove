@@ -6,3 +6,4 @@
 - [Web search provider](web-search-provider.md) — prefer Bing HTML results with DuckDuckGo as fallback; DDG can return HTTP 200 with no parsed results here.
 - [Groq model lifecycle](groq-model-lifecycle.md) — retired Llama model IDs can fail even when the API key works; keep current Groq IDs and a fallback.
 - [BotHost runtime dependencies](bothost-runtime-dependencies.md) — BotHost may parse entry points as Python and does not inherit Replit's Nix packages.
+- [Telegram reaction delivery](telegram-reactions.md) — message reactions require bot admin rights, so private chats need an inline save fallback.
