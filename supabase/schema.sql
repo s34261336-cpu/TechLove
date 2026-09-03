@@ -23,6 +23,11 @@ create table if not exists public.user_sessions (
     updated_at timestamptz not null default now()
 );
 
+-- Older installations may already have user_sessions without updated_at.
+-- Add the column before creating the index so this script remains rerunnable.
+alter table public.user_sessions
+    add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists user_sessions_updated_at_idx
     on public.user_sessions (updated_at desc);
 
