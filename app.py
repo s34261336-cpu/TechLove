@@ -109,6 +109,7 @@ SUPABASE_MESSAGE_SOURCES_URL = (
     f"{SUPABASE_URL}/rest/v1/message_sources" if SUPABASE_URL else ""
 )
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+FAVORITES_PACKED_PREFIX = "__zeno_favorites_v1__:"
 SEEKAI_API_KEY = os.environ.get("SEEKAI_API_KEY", "")
 SEEKAI_BASE_URL = os.environ.get("SEEKAI_BASE_URL", "https://seekai.cc").rstrip("/")
 SEEKAI_API_URL = f"{SEEKAI_BASE_URL}/v1/chat/completions"
@@ -449,42 +450,53 @@ async def save_replied_message(message: Message) -> None:
         )
 
 
-async def save_favorite(user_id: int, source: dict) -> bool:
-    if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
-        return False
+def favorite_timestamp(item: dict) -> Any:
+    return (
+        item.get("created_at")
+        or item.get("updated_at")
+        or item.get("saved_at")
+        or item.get("createdAt")
+        or item.get("updatedAt")
+    )
 
-    payload = {
-        "user_id": str(user_id),
-        "content": source["text"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    headers = {
-        **supabase_headers(),
-        "Prefer": "return=minimal",
-    }
+
+def unpack_favorite_content(
+    content: Any,
+    fallback_date: Any = None,
+) -> list[dict]:
+    if not isinstance(content, str) or not content:
+        return []
+    if not content.startswith(FAVORITES_PACKED_PREFIX):
+        return [{"text": content, "created_at": fallback_date}]
+
     try:
-        async with shared_http_session() as http:
-            async with http.post(
-                SUPABASE_FAVORITES_URL,
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=8),
-            ) as response:
-                if response.status >= 400:
-                    details = await supabase_error_details(response)
-                    logger.warning(
-                        "Supabase favorite save failed: HTTP %s: %s",
-                        response.status,
-                        details,
-                    )
-                    return False
-        return True
-    except Exception as exc:
-        logger.warning("Supabase favorite save failed: %s", exc)
-        return False
+        packed = json.loads(content[len(FAVORITES_PACKED_PREFIX):])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return [{"text": content, "created_at": fallback_date}]
+    if not isinstance(packed, list):
+        return [{"text": content, "created_at": fallback_date}]
+
+    entries = []
+    for item in packed:
+        if isinstance(item, dict) and item.get("text"):
+            entries.append(
+                {
+                    "text": str(item["text"]),
+                    "created_at": item.get("created_at") or fallback_date,
+                }
+            )
+    return entries
 
 
-async def load_favorites(user_id: int) -> list[dict] | None:
+def pack_favorites(entries: list[dict]) -> str:
+    return FAVORITES_PACKED_PREFIX + json.dumps(
+        entries,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+async def fetch_favorite_rows(user_id: int) -> list[dict] | None:
     if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
         return None
 
@@ -511,43 +523,184 @@ async def load_favorites(user_id: int) -> list[dict] | None:
                     )
                     return None
                 data = await response.json()
-        favorites = []
-        for item in data:
-            if not isinstance(item, dict) or not item.get("content"):
-                continue
-            favorites.append(
-                {
-                    "text": item["content"],
-                    "created_at": (
-                        item.get("created_at")
-                        or item.get("updated_at")
-                        or item.get("saved_at")
-                        or item.get("createdAt")
-                        or item.get("updatedAt")
-                    ),
-                }
-            )
-        return favorites
+        return data if isinstance(data, list) else []
     except Exception as exc:
         logger.warning("Supabase favorites read failed: %s", exc)
         return None
+
+
+async def save_favorite(user_id: int, source: dict) -> bool:
+    if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
+        return False
+
+    saved_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "user_id": str(user_id),
+        "content": source["text"],
+        "created_at": saved_at,
+    }
+    headers = {
+        **supabase_headers(),
+        "Prefer": "return=minimal",
+    }
+    try:
+        async with shared_http_session() as http:
+            async with http.post(
+                SUPABASE_FAVORITES_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    details = await supabase_error_details(response)
+                    if (
+                        response.status == 409
+                        and "user_favorites_pkey" in details
+                        and "user_id" in details
+                    ):
+                        rows_params = {
+                            "user_id": f"eq.{user_id}",
+                            "select": "content,created_at,updated_at",
+                            "limit": "1",
+                        }
+                        async with http.get(
+                            SUPABASE_FAVORITES_URL,
+                            params=rows_params,
+                            headers=supabase_headers(),
+                            timeout=aiohttp.ClientTimeout(total=8),
+                        ) as rows_response:
+                            if rows_response.status < 400:
+                                rows = await rows_response.json()
+                            else:
+                                rows = []
+                        if rows and isinstance(rows[0], dict):
+                            existing = rows[0]
+                            entries = unpack_favorite_content(
+                                existing.get("content"),
+                                favorite_timestamp(existing),
+                            )
+                            entries.append(
+                                {
+                                    "text": str(source["text"]),
+                                    "created_at": saved_at,
+                                }
+                            )
+                            async with http.patch(
+                                SUPABASE_FAVORITES_URL,
+                                params={"user_id": f"eq.{user_id}"},
+                                json={
+                                    "content": pack_favorites(entries),
+                                    "updated_at": saved_at,
+                                },
+                                headers={
+                                    **supabase_headers(),
+                                    "Prefer": "return=minimal",
+                                },
+                                timeout=aiohttp.ClientTimeout(total=8),
+                            ) as patch_response:
+                                if patch_response.status < 400:
+                                    return True
+                                details = await supabase_error_details(
+                                    patch_response
+                                )
+                    logger.warning(
+                        "Supabase favorite save failed: HTTP %s: %s",
+                        response.status,
+                        details,
+                    )
+                    return False
+        return True
+    except Exception as exc:
+        logger.warning("Supabase favorite save failed: %s", exc)
+        return False
+
+
+async def load_favorites(user_id: int) -> list[dict] | None:
+    data = await fetch_favorite_rows(user_id)
+    if data is None:
+        return None
+
+    favorites = []
+    for item in data:
+        if not isinstance(item, dict) or not item.get("content"):
+            continue
+        favorites.extend(
+            unpack_favorite_content(
+                item["content"],
+                favorite_timestamp(item),
+            )
+        )
+    return favorites
 
 
 async def delete_favorite(user_id: int, favorite_text: str) -> bool:
     if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
         return False
 
-    params = {
-        "user_id": f"eq.{user_id}",
-        "content": f"eq.{favorite_text}",
-    }
-    headers = {**supabase_headers(), "Prefer": "return=representation"}
     try:
+        rows = await fetch_favorite_rows(user_id)
+        if rows is None:
+            return False
+
         async with shared_http_session() as http:
+            # Older databases used user_id as the primary key. Those rows are
+            # stored as one packed list by save_favorite until the migration
+            # in supabase/schema.sql is applied.
+            for row in rows:
+                content = row.get("content") if isinstance(row, dict) else None
+                if not isinstance(content, str) or not content.startswith(
+                    FAVORITES_PACKED_PREFIX
+                ):
+                    continue
+                entries = unpack_favorite_content(
+                    content,
+                    favorite_timestamp(row),
+                )
+                remaining = [
+                    entry for entry in entries
+                    if entry.get("text") != favorite_text
+                ]
+                if len(remaining) == len(entries):
+                    continue
+
+                row_params = {"user_id": f"eq.{user_id}"}
+                if remaining:
+                    async with http.patch(
+                        SUPABASE_FAVORITES_URL,
+                        params=row_params,
+                        json={"content": pack_favorites(remaining)},
+                        headers={
+                            **supabase_headers(),
+                            "Prefer": "return=minimal",
+                        },
+                        timeout=aiohttp.ClientTimeout(total=8),
+                    ) as response:
+                        if response.status < 400:
+                            return True
+                else:
+                    async with http.delete(
+                        SUPABASE_FAVORITES_URL,
+                        params=row_params,
+                        headers={
+                            **supabase_headers(),
+                            "Prefer": "return=representation",
+                        },
+                        timeout=aiohttp.ClientTimeout(total=8),
+                    ) as response:
+                        if response.status < 400:
+                            return True
+
+            params = {
+                "user_id": f"eq.{user_id}",
+                "content": f"eq.{favorite_text}",
+            }
             async with http.delete(
                 SUPABASE_FAVORITES_URL,
                 params=params,
-                headers=headers,
+                headers={
+                    **supabase_headers(),
+                    "Prefer": "return=representation",
+                },
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as response:
                 if response.status >= 400:
