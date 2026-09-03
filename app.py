@@ -303,7 +303,7 @@ async def save_message_source(
     if not SUPABASE_MESSAGE_SOURCES_URL or not SUPABASE_KEY:
         return
 
-    payload = {
+    source_record = {
         "chat_id": int(chat_id),
         "message_id": int(message_id),
         "text": text,
@@ -311,9 +311,13 @@ async def save_message_source(
         "source_user_id": source_user_id,
         "message_date": (message_date or datetime.now(MOSCOW_TZ)).isoformat(),
     }
+    payload = {
+        "user_id": str(source_user_id if source_user_id is not None else chat_id),
+        "source": json.dumps(source_record, ensure_ascii=False),
+    }
     headers = {
         **supabase_headers(),
-        "Prefer": "resolution=merge-duplicates,return=minimal",
+        "Prefer": "return=minimal",
     }
     try:
         async with shared_http_session() as http:
@@ -334,7 +338,11 @@ async def save_message_source(
         logger.warning("Supabase message source save failed: %s", exc)
 
 
-async def load_message_source(chat_id: int, message_id: int) -> dict | None:
+async def load_message_source(
+    chat_id: int,
+    message_id: int,
+    user_id: int,
+) -> dict | None:
     key = (int(chat_id), int(message_id))
     cached = message_source_cache.get(key)
     if cached:
@@ -343,10 +351,10 @@ async def load_message_source(chat_id: int, message_id: int) -> dict | None:
         return None
 
     params = {
-        "chat_id": f"eq.{chat_id}",
-        "message_id": f"eq.{message_id}",
-        "select": "chat_id,message_id,text,source_type,source_user_id,message_date",
-        "limit": "1",
+        "user_id": f"in.({user_id},{chat_id})",
+        "select": "source",
+        "order": "created_at.desc",
+        "limit": "100",
     }
     try:
         async with shared_http_session() as http:
@@ -365,36 +373,37 @@ async def load_message_source(chat_id: int, message_id: int) -> dict | None:
                     )
                     return None
                 data = await response.json()
-        if data and isinstance(data[0], dict) and data[0].get("text"):
-            source = data[0]
-            message_source_cache[key] = source
-            return source
+        for item in data:
+            if not isinstance(item, dict) or not item.get("source"):
+                continue
+            try:
+                source = json.loads(item["source"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(source, dict)
+                and int(source.get("chat_id", 0)) == int(chat_id)
+                and int(source.get("message_id", 0)) == int(message_id)
+                and source.get("text")
+            ):
+                message_source_cache[key] = source
+                return source
     except Exception as exc:
         logger.warning("Supabase message source read failed: %s", exc)
     return None
 
 
-async def save_favorite(
-    user_id: int,
-    source: dict,
-) -> bool:
+async def save_favorite(user_id: int, source: dict) -> bool:
     if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
         return False
 
     payload = {
-        "user_id": int(user_id),
-        "chat_id": int(source["chat_id"]),
-        "message_id": int(source["message_id"]),
-        "text": source["text"],
-        "source_type": source.get("source_type", "bot"),
-        "message_date": source.get(
-            "message_date",
-            datetime.now(MOSCOW_TZ).isoformat(),
-        ),
+        "user_id": str(user_id),
+        "content": source["text"],
     }
     headers = {
         **supabase_headers(),
-        "Prefer": "resolution=ignore-duplicates,return=minimal",
+        "Prefer": "return=minimal",
     }
     try:
         async with shared_http_session() as http:
@@ -424,7 +433,7 @@ async def load_favorites(user_id: int) -> list[dict] | None:
 
     params = {
         "user_id": f"eq.{user_id}",
-        "select": "id,text,source_type,message_date,created_at",
+        "select": "content,created_at,updated_at",
         "order": "created_at.desc",
         "limit": "50",
     }
@@ -445,19 +454,26 @@ async def load_favorites(user_id: int) -> list[dict] | None:
                     )
                     return None
                 data = await response.json()
-        return [item for item in data if isinstance(item, dict) and item.get("text")]
+        return [
+            {
+                "text": item["content"],
+                "created_at": item.get("created_at") or item.get("updated_at"),
+            }
+            for item in data
+            if isinstance(item, dict) and item.get("content")
+        ]
     except Exception as exc:
         logger.warning("Supabase favorites read failed: %s", exc)
         return None
 
 
-async def delete_favorite(user_id: int, favorite_id: int) -> bool:
+async def delete_favorite(user_id: int, favorite_text: str) -> bool:
     if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
         return False
 
     params = {
-        "id": f"eq.{favorite_id}",
         "user_id": f"eq.{user_id}",
+        "content": f"eq.{favorite_text}",
     }
     headers = {**supabase_headers(), "Prefer": "return=representation"}
     try:
@@ -5625,7 +5641,11 @@ async def handle_message_reaction(event: MessageReactionUpdated):
     if has_heart_reaction(event.old_reaction):
         return
 
-    source = await load_message_source(event.chat.id, event.message_id)
+    source = await load_message_source(
+        event.chat.id,
+        event.message_id,
+        event.user.id,
+    )
     if not source:
         logger.warning(
             "Could not resolve reacted message %s in chat %s",
@@ -5661,14 +5681,9 @@ async def cmd_favorites(message: Message):
         favorite_text = " ".join(str(favorite["text"]).split())
         if len(favorite_text) > 600:
             favorite_text = favorite_text[:597].rstrip() + "…"
-        source_label = (
-            "ваше сообщение"
-            if favorite.get("source_type") == "user"
-            else "ответ бота"
-        )
         entry = (
-            f"<b>{index}.</b> <i>{format_favorite_date(favorite.get('created_at'))}"
-            f" · {source_label}</i>\n"
+            f"<b>{index}.</b> "
+            f"<i>{format_favorite_date(favorite.get('created_at'))}</i>\n"
             f"{html_escape(favorite_text)}"
         )
         if len("\n\n".join(lines + [entry])) > 3900:
@@ -5711,11 +5726,8 @@ async def cmd_delete_favorite(message: Message):
         await message.answer("Избранное с таким номером не найдено.")
         return
 
-    favorite_id = favorites[favorite_number - 1].get("id")
-    if not isinstance(favorite_id, int):
-        await message.answer("Не удалось определить выбранное избранное.")
-        return
-    if await delete_favorite(message.from_user.id, favorite_id):
+    favorite_text = favorites[favorite_number - 1]["text"]
+    if await delete_favorite(message.from_user.id, favorite_text):
         await message.answer(f"✅ Избранное №{favorite_number} удалено.")
     else:
         await message.answer(
