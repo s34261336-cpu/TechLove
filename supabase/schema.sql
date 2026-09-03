@@ -24,12 +24,10 @@ create table if not exists public.user_sessions (
 );
 
 -- Older installations may already have user_sessions without updated_at.
--- Add the column before creating the index so this script remains rerunnable.
+-- The bot does not depend on an index for this column, so the migration
+-- remains compatible with both old and new installations.
 alter table public.user_sessions
     add column if not exists updated_at timestamptz not null default now();
-
-create index if not exists user_sessions_updated_at_idx
-    on public.user_sessions (updated_at desc);
 
 create table if not exists public.message_sources (
     chat_id bigint not null,
