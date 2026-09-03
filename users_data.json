@@ -1,39 +1,77 @@
 {
   "5814345235": {
     "user_id": 5814345235,
-    "first_name": "𝑷𝒂𝒓𝒂𝒅𝒐𝒙 | 𝒔𝒉𝒂𝒉𝒊𝒅𝒐𝒗",
     "username": "Vainsez",
-    "zenotoken": 95,
+    "free_gens": 6,
     "joined_at": "21.07.2026 06:01",
-    "last_seen": "31.08.2026 18:06",
-    "messages_count": 324,
-    "free_gens": 6
-  },
-  "7853055323": {
-    "user_id": 7853055323,
-    "first_name": "Patekkk",
-    "username": "wnepatek",
-    "zenotoken": 0,
-    "joined_at": "26.07.2026 11:49",
-    "last_seen": "14.08.2026 19:35",
-    "messages_count": 9
+    "last_seen": "03.09.2026 03:43",
+    "zenotoken": 230,
+    "first_name": "𝑷𝒂𝒓𝒂𝒅𝒐𝒙 | 𝒔𝒉𝒂𝒉𝒊𝒅𝒐𝒗",
+    "messages_count": 360
   },
   "7251324133": {
     "user_id": 7251324133,
-    "first_name": "deratinov",
     "username": "oesxem",
-    "zenotoken": 0,
     "joined_at": "26.07.2026 18:13",
     "last_seen": "26.07.2026 18:13",
+    "zenotoken": 0,
+    "first_name": "deratinov",
     "messages_count": 1
+  },
+  "7853055323": {
+    "user_id": 7853055323,
+    "username": "wnepatek",
+    "joined_at": "26.07.2026 11:49",
+    "last_seen": "01.09.2026 04:12",
+    "zenotoken": 0,
+    "first_name": "Patekkk | птк",
+    "messages_count": 16
   },
   "7938248578": {
     "user_id": 7938248578,
-    "first_name": "ridzzxmood",
     "username": "fabiavv",
-    "zenotoken": 0,
     "joined_at": "01.08.2026 16:19",
     "last_seen": "01.08.2026 16:19",
+    "zenotoken": 0,
+    "first_name": "ridzzxmood",
     "messages_count": 1
+  },
+  "8253472474": {
+    "user_id": 8253472474,
+    "username": "Tripazniy",
+    "joined_at": "24.08.2026 11:33",
+    "last_seen": "24.08.2026 11:37",
+    "zenotoken": 0,
+    "first_name": "turnover",
+    "messages_count": 8
+  },
+  "8533676219": {
+    "user_id": 8533676219,
+    "username": "Borpaap",
+    "joined_at": "30.08.2026 21:20",
+    "last_seen": "30.08.2026 21:20",
+    "zenotoken": 0,
+    "first_name": "wantedov",
+    "messages_count": 1
+  },
+  "8857835397": {
+    "user_id": 8857835397,
+    "username": "Fersfas",
+    "joined_at": "25.08.2026 05:54",
+    "last_seen": "30.08.2026 15:55",
+    "zenotoken": 0,
+    "first_name": "Александр",
+    "messages_count": 32
+  },
+  "8999099008": {
+    "user_id": 8999099008,
+    "username": "Shadow_frags",
+    "free_gens": 18,
+    "joined_at": "28.08.2026 10:21",
+    "last_seen": "31.08.2026 18:14",
+    "vip_until": 1788283043.0332186,
+    "zenotoken": 20,
+    "first_name": "Shadow",
+    "messages_count": 38
   }
 }

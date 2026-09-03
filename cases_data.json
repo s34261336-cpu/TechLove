@@ -2,45 +2,35 @@
   "case_1785853778": {
     "id": "case_1785853778",
     "name": "Test",
-    "total_count": 5,
-    "per_user_limit": 7,
-    "opened_count": 5,
     "opened_by": {
       "5814345235": 5
-    }
+    },
+    "total_count": 5,
+    "opened_count": 5,
+    "per_user_limit": 7
   },
-  "case_1788198982": {
-    "id": "case_1788198982",
-    "name": "TestQ",
+  "case_1788272238": {
+    "id": "case_1788272238",
+    "name": "September",
+    "opened_by": {},
     "total_count": 0,
-    "per_user_limit": 1,
     "opened_count": 0,
-    "opened_by": {}
+    "per_user_limit": 10
   },
-  "case_1788199312": {
-    "id": "case_1788199312",
-    "name": "TestE",
+  "case_1788272263": {
+    "id": "case_1788272263",
+    "name": "Totally",
+    "opened_by": {},
     "total_count": 0,
-    "per_user_limit": 1,
     "opened_count": 0,
-    "opened_by": {}
+    "per_user_limit": 5
   },
-  "case_1788199369": {
-    "id": "case_1788199369",
-    "name": "1",
-    "total_count": 1,
-    "per_user_limit": 1,
-    "opened_count": 1,
-    "opened_by": {
-      "5814345235": 1
-    }
-  },
-  "case_1788199550": {
-    "id": "case_1788199550",
-    "name": "2",
+  "case_1788272899": {
+    "id": "case_1788272899",
+    "name": "New",
+    "opened_by": {},
     "total_count": 0,
-    "per_user_limit": 2,
     "opened_count": 0,
-    "opened_by": {}
+    "per_user_limit": 3
   }
 }

@@ -1,41 +1,18 @@
 {
-  "sn_gemma4_31b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "67",
-    "until": null,
-    "restricted_at": "27.07.2026 06:30"
-  },
-  "sn_deepseek_v3_2": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "67",
-    "until": null,
-    "restricted_at": "27.07.2026 06:30"
-  },
-  "sn_deepseek_v3_1": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "67",
-    "until": null,
-    "restricted_at": "27.07.2026 06:30"
-  },
-  "sn_gpt_oss_120b": {
-    "restricted": true,
-    "type": "permanent",
-    "reason": "52",
-    "until": null,
-    "restricted_at": "27.07.2026 06:31"
-  },
   "_prices": {
-    "or_nemotron_9b": 2,
-    "or_gpt_oss_20b": 4,
-    "or_ling_flash": 2,
     "or_gemma4_26b": 1,
+    "or_ling_flash": 2,
+    "or_nemotron_9b": 2,
+    "sn_minimax_m27": 2,
     "or_nemotron_30b": 2,
     "or_nemotron_120b": 2,
-    "or_nemotron_550b": 3
+    "or_nemotron_550b": 3,
+    "sn_deepseek_v3_1": 1,
+    "sn_deepseek_v3_2": 2,
+    "seekai_gpt_5_6_luna": 4,
+    "seekai_gemini_3_flash": 5,
+    "seekai_deepseek_v4_flash": 2
   },
-  "_img_gen_price": 4,
-  "_video_gen_price": 6
+  "_img_gen_price": 1,
+  "_video_gen_price": 2
 }

@@ -29,7 +29,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     BotCommand, ReplyKeyboardMarkup, KeyboardButton, TelegramObject, FSInputFile,
-    BufferedInputFile, ErrorEvent,
+    BufferedInputFile, ErrorEvent, MessageReactionUpdated, ReactionTypeEmoji,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -104,6 +104,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 SUPABASE_FACTS_URL = f"{SUPABASE_URL}/rest/v1/user_facts" if SUPABASE_URL else ""
 SUPABASE_STATE_URL = f"{SUPABASE_URL}/rest/v1/bot_state" if SUPABASE_URL else ""
 SUPABASE_SESSIONS_URL = f"{SUPABASE_URL}/rest/v1/user_sessions" if SUPABASE_URL else ""
+SUPABASE_FAVORITES_URL = f"{SUPABASE_URL}/rest/v1/user_favorites" if SUPABASE_URL else ""
+SUPABASE_MESSAGE_SOURCES_URL = (
+    f"{SUPABASE_URL}/rest/v1/message_sources" if SUPABASE_URL else ""
+)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 SEEKAI_API_KEY = os.environ.get("SEEKAI_API_KEY", "")
 SEEKAI_BASE_URL = os.environ.get("SEEKAI_BASE_URL", "https://seekai.cc").rstrip("/")
@@ -134,6 +138,8 @@ MEDIA_FILE = "media_data.json"
 DEFAULT_MAIN_IMAGE = "attached_assets/IMG_20260810_101608_213_1787023992393.jpg"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 REMINDERS_LOCK = threading.Lock()
+MESSAGE_SOURCE_CACHE_LIMIT = 2000
+message_source_cache: dict[tuple[int, int], dict] = {}
 
 MEDIA_BLOCKS = {
     "main_menu": {
@@ -243,6 +249,250 @@ def supabase_headers() -> dict[str, str]:
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
     }
+
+
+def remember_message_source(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    source_type: str,
+    source_user_id: int | None = None,
+    message_date: datetime | None = None,
+) -> None:
+    """Keep a short local index so a reaction can be handled immediately."""
+    if not text:
+        return
+    key = (int(chat_id), int(message_id))
+    message_source_cache[key] = {
+        "chat_id": int(chat_id),
+        "message_id": int(message_id),
+        "text": text,
+        "source_type": source_type,
+        "source_user_id": source_user_id,
+        "message_date": (message_date or datetime.now(MOSCOW_TZ)).isoformat(),
+    }
+    while len(message_source_cache) > MESSAGE_SOURCE_CACHE_LIMIT:
+        message_source_cache.pop(next(iter(message_source_cache)))
+
+
+async def save_message_source(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    source_type: str,
+    source_user_id: int | None = None,
+    message_date: datetime | None = None,
+) -> None:
+    """Save message text so a later Telegram reaction can resolve it."""
+    remember_message_source(
+        chat_id,
+        message_id,
+        text,
+        source_type,
+        source_user_id,
+        message_date,
+    )
+    if not SUPABASE_MESSAGE_SOURCES_URL or not SUPABASE_KEY:
+        return
+
+    payload = {
+        "chat_id": int(chat_id),
+        "message_id": int(message_id),
+        "text": text,
+        "source_type": source_type,
+        "source_user_id": source_user_id,
+        "message_date": (message_date or datetime.now(MOSCOW_TZ)).isoformat(),
+    }
+    headers = {
+        **supabase_headers(),
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    try:
+        async with shared_http_session() as http:
+            async with http.post(
+                SUPABASE_MESSAGE_SOURCES_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning(
+                        "Supabase message source save failed: HTTP %s",
+                        response.status,
+                    )
+    except Exception as exc:
+        logger.warning("Supabase message source save failed: %s", exc)
+
+
+async def load_message_source(chat_id: int, message_id: int) -> dict | None:
+    key = (int(chat_id), int(message_id))
+    cached = message_source_cache.get(key)
+    if cached:
+        return cached
+    if not SUPABASE_MESSAGE_SOURCES_URL or not SUPABASE_KEY:
+        return None
+
+    params = {
+        "chat_id": f"eq.{chat_id}",
+        "message_id": f"eq.{message_id}",
+        "select": "chat_id,message_id,text,source_type,source_user_id,message_date",
+        "limit": "1",
+    }
+    try:
+        async with shared_http_session() as http:
+            async with http.get(
+                SUPABASE_MESSAGE_SOURCES_URL,
+                params=params,
+                headers=supabase_headers(),
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning(
+                        "Supabase message source read failed: HTTP %s",
+                        response.status,
+                    )
+                    return None
+                data = await response.json()
+        if data and isinstance(data[0], dict) and data[0].get("text"):
+            source = data[0]
+            message_source_cache[key] = source
+            return source
+    except Exception as exc:
+        logger.warning("Supabase message source read failed: %s", exc)
+    return None
+
+
+async def save_favorite(
+    user_id: int,
+    source: dict,
+) -> bool:
+    if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
+        return False
+
+    payload = {
+        "user_id": int(user_id),
+        "chat_id": int(source["chat_id"]),
+        "message_id": int(source["message_id"]),
+        "text": source["text"],
+        "source_type": source.get("source_type", "bot"),
+        "message_date": source.get(
+            "message_date",
+            datetime.now(MOSCOW_TZ).isoformat(),
+        ),
+    }
+    headers = {
+        **supabase_headers(),
+        "Prefer": "resolution=ignore-duplicates,return=minimal",
+    }
+    try:
+        async with shared_http_session() as http:
+            async with http.post(
+                SUPABASE_FAVORITES_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning(
+                        "Supabase favorite save failed: HTTP %s",
+                        response.status,
+                    )
+                    return False
+        return True
+    except Exception as exc:
+        logger.warning("Supabase favorite save failed: %s", exc)
+        return False
+
+
+async def load_favorites(user_id: int) -> list[dict] | None:
+    if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
+        return None
+
+    params = {
+        "user_id": f"eq.{user_id}",
+        "select": "id,text,source_type,message_date,created_at",
+        "order": "created_at.desc",
+        "limit": "50",
+    }
+    try:
+        async with shared_http_session() as http:
+            async with http.get(
+                SUPABASE_FAVORITES_URL,
+                params=params,
+                headers=supabase_headers(),
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("Supabase favorites read failed: HTTP %s", response.status)
+                    return None
+                data = await response.json()
+        return [item for item in data if isinstance(item, dict) and item.get("text")]
+    except Exception as exc:
+        logger.warning("Supabase favorites read failed: %s", exc)
+        return None
+
+
+async def delete_favorite(user_id: int, favorite_id: int) -> bool:
+    if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
+        return False
+
+    params = {
+        "id": f"eq.{favorite_id}",
+        "user_id": f"eq.{user_id}",
+    }
+    headers = {**supabase_headers(), "Prefer": "return=representation"}
+    try:
+        async with shared_http_session() as http:
+            async with http.delete(
+                SUPABASE_FAVORITES_URL,
+                params=params,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status >= 400:
+                    logger.warning(
+                        "Supabase favorite delete failed: HTTP %s",
+                        response.status,
+                    )
+                    return False
+                deleted = await response.json()
+        return bool(deleted)
+    except Exception as exc:
+        logger.warning("Supabase favorite delete failed: %s", exc)
+        return False
+
+
+def format_favorite_date(value: str | None) -> str:
+    if not value:
+        return "дата неизвестна"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=MOSCOW_TZ)
+        return parsed.astimezone(MOSCOW_TZ).strftime("%d.%m.%Y в %H:%M")
+    except (TypeError, ValueError):
+        return "дата неизвестна"
+
+
+async def answer_and_track(
+    message: Message,
+    text: str,
+    **kwargs,
+) -> Message:
+    """Send a text reply and index it for a possible heart reaction."""
+    sent = await message.answer(text, **kwargs)
+    if sent.text:
+        asyncio.create_task(
+            save_message_source(
+                sent.chat.id,
+                sent.message_id,
+                sent.text,
+                "bot",
+                message.from_user.id if message.from_user else None,
+                sent.date,
+            )
+        )
+    return sent
 
 
 async def load_user_facts(user_id: int) -> list[str]:
@@ -1775,6 +2025,17 @@ class AntiSpamMiddleware(BaseMiddleware):
     ) -> Any:
         if isinstance(event, Message):
             user_id = event.from_user.id
+            if event.text and event.from_user:
+                asyncio.create_task(
+                    save_message_source(
+                        event.chat.id,
+                        event.message_id,
+                        event.text,
+                        "user",
+                        event.from_user.id,
+                        event.date,
+                    )
+                )
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id
         else:
@@ -2299,6 +2560,8 @@ async def cmd_help(message: Message):
         "/search — поиск в интернете\n"
         "/status — текущие настройки\n"
         "/profile — мой профиль\n"
+        "/favorites — сохранённые ответы\n"
+        "/delete_favorite номер — удалить сохранённый ответ\n"
         "/help — помощь"
     )
     kb = main_keyboard(message.from_user.id)
@@ -5323,7 +5586,121 @@ async def fsm_search_query(message: Message, state: FSMContext):
         await run_search(message, state, message.text or "")
 
 
+def has_heart_reaction(reactions: list) -> bool:
+    return any(
+        isinstance(reaction, ReactionTypeEmoji)
+        and reaction.emoji in {"❤", "❤️"}
+        for reaction in reactions
+    )
+
+
+@router.message_reaction()
+async def handle_message_reaction(event: MessageReactionUpdated):
+    """Save the reacted message when a user adds a heart."""
+    if not event.user:
+        return
+    if not has_heart_reaction(event.new_reaction):
+        return
+    if has_heart_reaction(event.old_reaction):
+        return
+
+    source = await load_message_source(event.chat.id, event.message_id)
+    if not source:
+        logger.warning(
+            "Could not resolve reacted message %s in chat %s",
+            event.message_id,
+            event.chat.id,
+        )
+        return
+
+    await save_favorite(event.user.id, source)
+
+
 # ─── Reminders and message handler ────────────────────────────────────────────
+
+@router.message(Command("favorites"))
+async def cmd_favorites(message: Message):
+    favorites = await load_favorites(message.from_user.id)
+    if favorites is None:
+        await message.answer(
+            "⚠️ Избранное временно недоступно. Попробуйте ещё раз позже."
+        )
+        return
+    if not favorites:
+        await message.answer(
+            "❤️ <b>Избранное пока пусто.</b>\n\n"
+            "Поставьте реакцию ❤️ на своё сообщение или ответ бота, "
+            "чтобы сохранить текст.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    lines = ["❤️ <b>Избранное</b>\n"]
+    for index, favorite in enumerate(favorites, start=1):
+        favorite_text = " ".join(str(favorite["text"]).split())
+        if len(favorite_text) > 600:
+            favorite_text = favorite_text[:597].rstrip() + "…"
+        source_label = (
+            "ваше сообщение"
+            if favorite.get("source_type") == "user"
+            else "ответ бота"
+        )
+        entry = (
+            f"<b>{index}.</b> <i>{format_favorite_date(favorite.get('created_at'))}"
+            f" · {source_label}</i>\n"
+            f"{html_escape(favorite_text)}"
+        )
+        if len("\n\n".join(lines + [entry])) > 3900:
+            remaining = len(favorites) - index + 1
+            lines.append(f"\n<i>И ещё {remaining} сохранённых ответов.</i>")
+            break
+        lines.append(entry)
+
+    lines.append("\nУдалить: <code>/delete_favorite номер</code>")
+    await answer_and_track(
+        message,
+        "\n\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(Command("delete_favorite"))
+async def cmd_delete_favorite(message: Message):
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer(
+            "Укажите номер из списка избранного:\n"
+            "<code>/delete_favorite 1</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    favorite_number = int(parts[1].strip().split()[0])
+    if favorite_number < 1:
+        await message.answer("Номер избранного должен быть положительным.")
+        return
+
+    favorites = await load_favorites(message.from_user.id)
+    if favorites is None:
+        await message.answer(
+            "⚠️ Избранное временно недоступно. Попробуйте ещё раз позже."
+        )
+        return
+    if favorite_number > len(favorites):
+        await message.answer("Избранное с таким номером не найдено.")
+        return
+
+    favorite_id = favorites[favorite_number - 1].get("id")
+    if not isinstance(favorite_id, int):
+        await message.answer("Не удалось определить выбранное избранное.")
+        return
+    if await delete_favorite(message.from_user.id, favorite_id):
+        await message.answer(f"✅ Избранное №{favorite_number} удалено.")
+    else:
+        await message.answer(
+            "Не удалось удалить избранное. Попробуйте ещё раз позже."
+        )
+
 
 @router.message(Command("reminders"))
 async def list_reminders(message: Message):
@@ -5504,7 +5881,7 @@ async def process_text_message(message: Message, text: str):
 
     simple_greeting = get_simple_greeting(text)
     if simple_greeting:
-        await message.answer(simple_greeting, parse_mode=ParseMode.HTML)
+        await answer_and_track(message, simple_greeting, parse_mode=ParseMode.HTML)
         return
 
     await hydrate_user_session(user_id)
@@ -5520,7 +5897,8 @@ async def process_text_message(message: Message, text: str):
                 time_note = f"⏳ Временно недоступна до <b>{until_str}</b>"
             else:
                 time_note = "🔴 Модель недоступна"
-            await message.answer(
+            await answer_and_track(
+                message,
                 f"⚠️ <b>{model['name']}</b> сейчас недоступна.\n\n"
                 f"{time_note}\n"
         f"{PE_PIN} Причина: <i>{r['reason']}</i>\n\n"
@@ -5535,7 +5913,8 @@ async def process_text_message(message: Message, text: str):
         profile = get_user_profile(user_id)
         balance = profile.get("zenotoken", 0)
         if balance < token_price:
-            await message.answer(
+            await answer_and_track(
+                message,
                 f"{PE_COIN} <b>Недостаточно ZenoToken!</b>\n\n"
                 f"Модель <b>{model['name']}</b> стоит <b>{token_price} {PE_COIN}</b> за запрос.\n"
                 f"Ваш баланс: <b>{balance} {PE_COIN}</b>\n\n"
@@ -5552,7 +5931,8 @@ async def process_text_message(message: Message, text: str):
             return
         success, new_balance = deduct_tokens(user_id, token_price)
         if not success:
-            await message.answer(
+            await answer_and_track(
+                message,
                 f"{PE_COIN} <b>Недостаточно ZenoToken!</b>\n\n"
                 f"Нужно <b>{token_price} {PE_COIN}</b>, у вас <b>{balance} {PE_COIN}</b>.\n\n"
                 f"Выберите бесплатную модель через кнопку «Модель».",
@@ -5593,10 +5973,14 @@ async def process_text_message(message: Message, text: str):
         chunks = [reply[i:i + 4096] for i in range(0, len(reply), 4096)]
         for chunk in chunks:
             try:
-                await message.answer(chunk, parse_mode=ParseMode.MARKDOWN)
+                await answer_and_track(
+                    message,
+                    chunk,
+                    parse_mode=ParseMode.MARKDOWN,
+                )
             except Exception:
                 # Fallback: send as plain text if Markdown parsing fails
-                await message.answer(chunk)
+                await answer_and_track(message, chunk)
 
     except RateLimitError as e:
         logger.warning(f"Rate limit for user {user_id}: {e}")
@@ -6224,6 +6608,8 @@ async def set_commands(bot: Bot):
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
         BotCommand(command="reminders", description="Мои напоминания"),
         BotCommand(command="cancel_reminder", description="Удалить напоминание"),
+        BotCommand(command="favorites", description="Сохранённые ответы"),
+        BotCommand(command="delete_favorite", description="Удалить ответ из избранного"),
         BotCommand(command="help",    description="Помощь"),
     ])
 
@@ -6245,7 +6631,10 @@ async def main():
     try:
         await set_commands(bot)
         logger.info("Бот запущен; доступны Groq и SeekAI.")
-        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message", "callback_query", "message_reaction"],
+        )
     finally:
         reminder_task.cancel()
         try:
