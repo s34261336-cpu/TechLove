@@ -19,15 +19,8 @@ create table if not exists public.bot_state (
 
 create table if not exists public.user_sessions (
     user_id bigint primary key,
-    session_data jsonb not null,
-    updated_at timestamptz not null default now()
+    session_data jsonb not null
 );
-
--- Older installations may already have user_sessions without updated_at.
--- The bot does not depend on an index for this column, so the migration
--- remains compatible with both old and new installations.
-alter table public.user_sessions
-    add column if not exists updated_at timestamptz not null default now();
 
 create table if not exists public.message_sources (
     chat_id bigint not null,
