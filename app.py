@@ -393,6 +393,62 @@ async def load_message_source(
     return None
 
 
+SAVE_REQUEST_RE = re.compile(
+    r"^(?:сохрани|сохранить|запомни|добавь(?:\s+это)?\s+в\s+избранное)"
+    r"(?:\s+(?:это|ответ|сообщение|в\s+избранное))?[.!?]*$",
+    re.IGNORECASE,
+)
+
+
+def is_save_request(text: str | None) -> bool:
+    normalized = " ".join((text or "").casefold().split())
+    return bool(normalized and SAVE_REQUEST_RE.fullmatch(normalized))
+
+
+async def save_replied_message(message: Message) -> None:
+    """Save the message being replied to when the user sends a save request."""
+    replied = message.reply_to_message
+    if not replied:
+        await message.answer(
+            "Чтобы сохранить сообщение, ответь на него в Telegram и напиши "
+            "«Сохрани»."
+        )
+        return
+
+    source = await load_message_source(
+        replied.chat.id,
+        replied.message_id,
+        message.from_user.id,
+    )
+    if not source:
+        replied_text = replied.text or replied.caption
+        if replied_text:
+            source = {
+                "chat_id": replied.chat.id,
+                "message_id": replied.message_id,
+                "text": replied_text,
+                "source_type": "reply",
+                "source_user_id": (
+                    replied.from_user.id if replied.from_user else None
+                ),
+                "message_date": replied.date.isoformat(),
+            }
+
+    if not source:
+        await message.answer(
+            "Не получилось прочитать сообщение. Ответь на текстовый ответ "
+            "бота или отправь команду ещё раз."
+        )
+        return
+
+    if await save_favorite(message.from_user.id, source):
+        await message.answer("❤️ Сохранил в избранное.")
+    else:
+        await message.answer(
+            "Не удалось сохранить сообщение. Проверь подключение и попробуй ещё раз."
+        )
+
+
 async def save_favorite(user_id: int, source: dict) -> bool:
     if not SUPABASE_FAVORITES_URL or not SUPABASE_KEY:
         return False
@@ -516,12 +572,12 @@ async def answer_and_track(
     text: str,
     **kwargs,
 ) -> Message:
-    """Send a text reply and index it for a possible heart reaction."""
+    """Send a text reply and index it for later reply-based saving."""
     sent = await message.answer(text, **kwargs)
     if sent.text:
         # Put the source in the in-process cache before yielding again. This
-        # removes the small race where a user reacts immediately after the
-        # reply appears and the background Supabase write has not started yet.
+        # removes the small race where a user replies immediately after the
+        # response appears and the background Supabase write has not started yet.
         remember_message_source(
             sent.chat.id,
             sent.message_id,
@@ -540,36 +596,6 @@ async def answer_and_track(
                 sent.date,
             )
         )
-
-        # Telegram does not deliver message_reaction updates in private
-        # chats because a bot cannot be an administrator there. Add a direct
-        # fallback button so saving still works in the usual bot chat.
-        favorite_rows = [[
-            InlineKeyboardButton(
-                text="❤️ Сохранить ответ",
-                callback_data=f"favorite:{sent.chat.id}:{sent.message_id}",
-            )
-        ]]
-        if message.text and message.message_id != sent.message_id:
-            favorite_rows.append([InlineKeyboardButton(
-                text="❤️ Сохранить мой запрос",
-                callback_data=f"favorite:{message.chat.id}:{message.message_id}",
-            )])
-
-        existing_markup = kwargs.get("reply_markup")
-        if isinstance(existing_markup, InlineKeyboardMarkup):
-            favorite_markup = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    *existing_markup.inline_keyboard,
-                    *favorite_rows,
-                ]
-            )
-        else:
-            favorite_markup = InlineKeyboardMarkup(inline_keyboard=favorite_rows)
-        try:
-            await sent.edit_reply_markup(reply_markup=favorite_markup)
-        except Exception as exc:
-            logger.warning("Favorite button could not be added: %s", exc)
     return sent
 
 
@@ -2647,6 +2673,7 @@ async def cmd_help(message: Message):
         "/status — текущие настройки\n"
         "/profile — мой профиль\n"
         "/favorites — сохранённые ответы\n"
+        "Чтобы сохранить ответ: ответьте на него и напишите «Сохрани»\n"
         "/delete_favorite номер — удалить сохранённый ответ\n"
         "/help — помощь"
     )
@@ -5765,8 +5792,7 @@ async def cmd_favorites(message: Message):
     if not favorites:
         await message.answer(
             "❤️ <b>Избранное пока пусто.</b>\n\n"
-            "Поставьте реакцию ❤️ или нажмите кнопку "
-            "«Сохранить» на своём сообщении или ответе бота.",
+            "Ответьте на нужное сообщение и напишите «Сохрани».",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -5955,6 +5981,11 @@ async def handle_voice(message: Message):
             "❌ Не удалось распознать голосовое сообщение.\n\n"
             "Попробуйте записать его ещё раз короче и без сильного фонового шума."
         )
+
+
+@router.message(lambda message: is_save_request(message.text))
+async def handle_save_request(message: Message):
+    await save_replied_message(message)
 
 
 @router.message(F.text)
