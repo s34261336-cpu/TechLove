@@ -8,7 +8,7 @@ import tempfile
 import shutil
 import subprocess
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import time
 import uuid
@@ -456,6 +456,7 @@ async def save_favorite(user_id: int, source: dict) -> bool:
     payload = {
         "user_id": str(user_id),
         "content": source["text"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     headers = {
         **supabase_headers(),
@@ -510,14 +511,23 @@ async def load_favorites(user_id: int) -> list[dict] | None:
                     )
                     return None
                 data = await response.json()
-        return [
-            {
-                "text": item["content"],
-                "created_at": item.get("created_at") or item.get("updated_at"),
-            }
-            for item in data
-            if isinstance(item, dict) and item.get("content")
-        ]
+        favorites = []
+        for item in data:
+            if not isinstance(item, dict) or not item.get("content"):
+                continue
+            favorites.append(
+                {
+                    "text": item["content"],
+                    "created_at": (
+                        item.get("created_at")
+                        or item.get("updated_at")
+                        or item.get("saved_at")
+                        or item.get("createdAt")
+                        or item.get("updatedAt")
+                    ),
+                }
+            )
+        return favorites
     except Exception as exc:
         logger.warning("Supabase favorites read failed: %s", exc)
         return None
@@ -555,15 +565,22 @@ async def delete_favorite(user_id: int, favorite_text: str) -> bool:
         return False
 
 
-def format_favorite_date(value: str | None) -> str:
+def format_favorite_date(value: Any) -> str:
     if not value:
         return "дата неизвестна"
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, (int, float)):
+            timestamp = value / 1000 if value > 100_000_000_000 else value
+            parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        else:
+            normalized = str(value).strip().replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=MOSCOW_TZ)
         return parsed.astimezone(MOSCOW_TZ).strftime("%d.%m.%Y в %H:%M")
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError, OverflowError, OSError):
         return "дата неизвестна"
 
 

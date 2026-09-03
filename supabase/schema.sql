@@ -44,6 +44,11 @@ create table if not exists public.user_favorites (
     updated_at timestamptz
 );
 
+alter table public.user_favorites
+    add column if not exists created_at timestamptz not null default now();
+alter table public.user_favorites
+    add column if not exists updated_at timestamptz;
+
 create index if not exists user_favorites_user_id_created_at_idx
     on public.user_favorites (user_id, created_at desc);
 
