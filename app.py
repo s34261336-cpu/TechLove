@@ -2936,6 +2936,23 @@ async def cmd_status(message: Message):
 
 # ─── /profile ─────────────────────────────────────────────────────────────────
 
+def profile_actions_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Открыть генерации",
+                callback_data="profile:generation",
+                style="success",
+            ),
+            InlineKeyboardButton(
+                text="Настройки",
+                callback_data="profile:settings",
+                style="primary",
+            ),
+        ],
+    ])
+
+
 @router.message(Command("profile"))
 @router.message(F.text == "Профиль")
 @router.message(F.text == "👤 Профиль")
@@ -2953,18 +2970,26 @@ async def cmd_profile(message: Message):
         h, m = rem // 3600, (rem % 3600) // 60
         vip_line = f"\n👑 <b>VIP-статус активен</b> — истекает через {h}ч {m}м"
     free_gens = profile.get("free_gens", 0)
+    photo_price = get_img_gen_price()
+    video_price = get_video_gen_price()
+    access_label = "VIP — генерации без ограничений" if vip else "Стандартный доступ"
     text = (
-        f"{'👑' if vip else PE_USER} <b>Профиль</b>{vip_line}\n\n"
-        f"{PE_USER} Имя: <b>{profile['first_name']}</b>\n"
-        f"{PE_LINK} Username: <b>{username_str}</b>\n"
+        f"{'👑' if vip else PE_USER} <b>Твой профиль</b>{vip_line}\n\n"
+        f"{PE_USER} <b>{html_escape(profile['first_name'])}</b>\n"
+        f"{PE_LINK} Username: <b>{html_escape(username_str)}</b>\n"
         f"{PE_ID} ID: <code>{profile['user_id']}</code>\n\n"
-        f"{PE_COIN} <b>ZenoToken: {profile.get('zenotoken', 0)}</b>\n"
-        f"{PE_TICKET} <b>Генерации: {free_gens}</b>\n\n"
+        f"{PE_COIN} <b>ZenoToken:</b> {profile.get('zenotoken', 0)}\n"
+        f"{PE_TICKET} <b>Доступно генераций:</b> {free_gens}\n"
+        f"🔐 <b>Тариф:</b> {access_label}\n\n"
         f"{PE_CHAT} Сообщений отправлено: <b>{profile.get('messages_count', 0)}</b>\n"
         f"{PE_DATE} Дата регистрации: <b>{profile.get('joined_at', '—')}</b>\n"
         f"{PE_CLOCK} Последняя активность: <b>{profile.get('last_seen', '—')}</b>\n\n"
         f"{PE_ROBOT} Текущая модель: {model['emoji_html']} <b>{model['name']}</b>\n"
-        f"{PE_ROLE} Текущая роль: {role['emoji_html']} <b>{role['name']}</b>"
+        f"{PE_ROLE} Текущая роль: {role['emoji_html']} <b>{role['name']}</b>\n\n"
+        f"{PE_ART} <b>Генерации:</b> фото — "
+        f"{'бесплатно' if photo_price == 0 else f'{photo_price} генерация'}; "
+        f"видео — {'бесплатно' if video_price == 0 else f'{video_price} генерация'}\n"
+        "Чтобы сохранить ответ, ответь на него и напиши «Сохрани»."
     )
     if vip:
         text += (
@@ -2973,8 +2998,44 @@ async def cmd_profile(message: Message):
             f"• {PE_ROBOT} Все платные модели бесплатны\n"
             "• ⚡ Антиспам вдвое мягче"
         )
-    if not await send_configured_photo(message, "profile", text):
-        await message.answer(text, parse_mode=ParseMode.HTML)
+    keyboard = profile_actions_keyboard()
+    if not await send_configured_photo(message, "profile", text, keyboard):
+        await message.answer(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+
+
+@router.callback_query(F.data == "profile:generation")
+async def cb_profile_generation(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer(
+        generation_home_text(callback.from_user.id),
+        parse_mode=ParseMode.HTML,
+        reply_markup=generation_home_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:settings")
+async def cb_profile_settings(callback: CallbackQuery):
+    session = get_session(callback.from_user.id)
+    model = MODELS[session["model"]]
+    role = ROLES[session["role"]]
+    text = (
+        f"{PE_SETTINGS} <b>Настройки профиля</b>\n\n"
+        f"{PE_ROBOT} Модель: {model['emoji_html']} <b>{model['name']}</b>\n"
+        f"{PE_ROLE} Роль: {role['emoji_html']} <b>{role['name']}</b>\n"
+        f"{PE_TEMPERATURE} Температура: <b>{session['temperature']:.1f}</b>\n\n"
+        "Изменить модель, роль и температуру можно кнопками ниже."
+    )
+    await callback.message.answer(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=settings_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
 
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
@@ -4232,12 +4293,109 @@ async def cb_open_model(callback: CallbackQuery):
 # ─── /img — Image generation ──────────────────────────────────────────────────
 
 IMG_WELCOME_TEXT = (
-    f"{PE_ART} <b>Генератор изображений</b>\n\n"
-    "Я создам картинку по вашему описанию с помощью Flux.\n\n"
-    "✦ Чем подробнее описание — тем лучше результат.\n"
-    "✦ Можно писать на русском или английском.\n"
-    "✦ Перед генерацией я сам улучшу промпт: стиль, свет и детали."
+    f"{PE_ART} <b>Студия генераций</b>\n\n"
+    "Создавай изображения и короткие видео из обычного описания. "
+    "Я сам уточню композицию, свет, стиль и детали — тебе достаточно описать идею.\n\n"
+    "<b>Как получить лучший результат:</b>\n"
+    "• укажи объект, место и настроение;\n"
+    "• добавь стиль или формат — портрет, постер, реализм, аниме;\n"
+    "• для видео опиши движение камеры или объекта.\n\n"
+    "<i>Пример: «кинематографичный портрет космонавта в оранжевом свете, "
+    "много деталей, вертикальная композиция»</i>"
 )
+
+
+GENERATION_EXAMPLES = {
+    "photo": [
+        "Кинематографичный портрет путешественницы в горах на рассвете, мягкий золотой свет, реалистичная фотография",
+        "Минималистичный постер для кофейни, тёплые цвета, чашка кофе и аккуратная типографика",
+        "Футуристичный город ночью после дождя, неоновые отражения, широкий кинематографичный кадр",
+    ],
+    "video": [
+        "Морская волна медленно накрывает камни, плавное движение камеры вперёд, рассветный свет",
+        "Неоновый город ночью, камера летит между зданиями, отражения дождя на улицах",
+        "Полевые цветы колышутся на ветру, солнечные блики, спокойная плавная съёмка крупным планом",
+    ],
+}
+
+
+def generation_home_text(user_id: int) -> str:
+    photo_price = get_img_gen_price()
+    video_price = get_video_gen_price()
+    photo_label = "бесплатно" if photo_price == 0 else f"{photo_price} {PE_TICKET}"
+    video_label = "бесплатно" if video_price == 0 else f"{video_price} {PE_TICKET}"
+    return (
+        f"{PE_SPARKLES} <b>Студия генераций</b>\n\n"
+        "Выбери формат — я помогу превратить идею в готовое медиа.\n\n"
+        f"{PE_IMAGE} <b>Фото</b> — детальное изображение по описанию · {photo_label}\n"
+        f"{PE_VIDEO} <b>Видео</b> — короткая плавная анимация · {video_label}"
+        f"{img_gen_info_text(user_id)}\n\n"
+        "<i>Можно писать по-русски. После отправки идеи ты увидишь превью "
+        "и сможешь изменить описание перед запуском.</i>"
+    )
+
+
+def generation_home_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Фото",
+                callback_data="img:mode:photo",
+                style="primary",
+                icon_custom_emoji_id=EMOJI_IMAGE_ID,
+            ),
+            InlineKeyboardButton(
+                text="Видео",
+                callback_data="img:mode:video",
+                style="success",
+                icon_custom_emoji_id=EMOJI_VIDEO_ID,
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Примеры для фото",
+                callback_data="img:examples:photo",
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text="Примеры для видео",
+                callback_data="img:examples:video",
+                style="success",
+            ),
+        ],
+    ])
+
+
+def image_prompt_keyboard(media_type: str) -> InlineKeyboardMarkup:
+    is_video = media_type == "video"
+    rows = [[
+        InlineKeyboardButton(
+            text="Создать видео" if is_video else "Создать фото",
+            callback_data="img:generate",
+            style="success",
+            icon_custom_emoji_id=EMOJI_VIDEO_ID if is_video else EMOJI_IMAGE_ID,
+        )
+    ]]
+    if not is_video:
+        rows.append([
+            InlineKeyboardButton(
+                text="HD — максимум деталей",
+                callback_data="img:generate:hd",
+                style="primary",
+            )
+        ])
+    rows.extend([
+        [InlineKeyboardButton(
+            text="Изменить описание",
+            callback_data="img:prompt",
+            icon_custom_emoji_id=EMOJI_EDIT_ID,
+        )],
+        [InlineKeyboardButton(
+            text="Сменить формат",
+            callback_data="img:home",
+        )],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.message(Command("img"))
@@ -4246,31 +4404,64 @@ IMG_WELCOME_TEXT = (
 @router.message(F.text == "Генерация")
 async def cmd_img(message: Message, state: FSMContext):
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Фото",
-            callback_data="img:mode:photo",
-            style="primary",
-            icon_custom_emoji_id=EMOJI_IMAGE_ID,
-        ),
-         InlineKeyboardButton(
-             text="Видео",
-             callback_data="img:mode:video",
-             style="success",
-             icon_custom_emoji_id=EMOJI_VIDEO_ID,
-         )],
-    ])
-    text = (
-        f"{PE_SPARKLES} <b>Генерация по описанию</b>\n\n"
-        "Выберите, что создать:\n"
-        f"{PE_IMAGE} <b>Фото</b> — изображение по вашему описанию.\n"
-        f"{PE_VIDEO} <b>Видео</b> — короткий клип с плавной анимацией.\n\n"
-        f"{PE_IMAGE} Фото: {('🆓 Бесплатно' if get_img_gen_price() == 0 else f'{get_img_gen_price()} {PE_TICKET} за генерацию')}\n"
-        f"{PE_VIDEO} Видео: {('🆓 Бесплатно' if get_video_gen_price() == 0 else f'{get_video_gen_price()} {PE_TICKET} за генерацию')}"
-        + img_gen_info_text(message.from_user.id)
-    )
+    kb = generation_home_keyboard()
+    text = generation_home_text(message.from_user.id)
     if not await send_configured_photo(message, "generation", text, kb):
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("img:examples:"))
+async def cb_img_examples(callback: CallbackQuery, state: FSMContext):
+    media_type = callback.data.split(":")[-1]
+    if media_type not in GENERATION_EXAMPLES:
+        await callback.answer("Примеры пока недоступны.", show_alert=True)
+        return
+
+    title = "фото" if media_type == "photo" else "видео"
+    rows = [
+        [InlineKeyboardButton(
+            text=f"Пример {index + 1}",
+            callback_data=f"img:example:{media_type}:{index}",
+            style="primary" if media_type == "photo" else "success",
+        )]
+        for index in range(len(GENERATION_EXAMPLES[media_type]))
+    ]
+    rows.append([
+        InlineKeyboardButton(text="Назад к форматам", callback_data="img:home")
+    ])
+    await callback.message.edit_text(
+        f"{PE_EDIT} <b>Идеи для {title}</b>\n\n"
+        "Выбери пример — его можно изменить перед запуском:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("img:example:"))
+async def cb_img_example(callback: CallbackQuery, state: FSMContext):
+    _, _, media_type, index_text = (callback.data or "").split(":", 3)
+    try:
+        index = int(index_text)
+        prompt = GENERATION_EXAMPLES[media_type][index]
+    except (KeyError, IndexError, TypeError, ValueError):
+        await callback.answer("Этот пример больше недоступен.", show_alert=True)
+        return
+
+    await state.update_data(
+        media_type=media_type,
+        current_prompt=prompt,
+        img_msg_id=callback.message.message_id,
+    )
+    await state.set_state(ImgStates.has_prompt)
+    await callback.message.edit_text(
+        f"{PE_EDIT} <b>Проверь описание</b>\n\n"
+        f"<i>{html_escape(prompt)}</i>\n\n"
+        "Можно сразу запускать или сначала изменить текст.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=image_prompt_keyboard(media_type),
+    )
+    await callback.answer("Пример выбран")
 
 
 @router.callback_query(F.data.startswith("img:mode:"))
@@ -4280,12 +4471,18 @@ async def cb_img_mode(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ImgStates.waiting_prompt)
     title = "фото" if media_type == "photo" else "видео"
     await callback.message.edit_text(
-        f"{PE_EDIT} <b>Опишите {title}</b>\n\n"
-        "Чем подробнее описание — тем лучше результат.\n\n"
-        "<i>Пример: закат над горами, лёгкое движение облаков, яркие цвета</i>",
+        f"{PE_EDIT} <b>Опиши идею для {title}</b>\n\n"
+        "Напиши, что должно быть в кадре, где это происходит и какое настроение "
+        "нужно передать. Для видео добавь движение камеры или объекта.\n\n"
+        f"<i>Например: {html_escape(GENERATION_EXAMPLES[media_type][0])}</i>\n\n"
+        f"{img_gen_info_text(callback.from_user.id).strip()}",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="img:cancel", style="danger")]
+            [InlineKeyboardButton(
+                text="Выбрать готовый пример",
+                callback_data=f"img:examples:{media_type}",
+            )],
+            [InlineKeyboardButton(text="Отмена", callback_data="img:cancel", style="danger")],
         ])
     )
     await callback.answer()
@@ -4293,16 +4490,21 @@ async def cb_img_mode(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "img:prompt")
 async def cb_img_prompt(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(media_type="photo")
+    data = await state.get_data()
+    media_type = data.get("media_type", "photo")
     await state.set_state(ImgStates.waiting_prompt)
     await state.update_data(img_msg_id=callback.message.message_id)
+    title = "видео" if media_type == "video" else "фото"
     await callback.message.edit_text(
-        f"{PE_EDIT} <b>Что рисуем?</b>\n\n"
-        "Напишите описание картинки — чем подробнее, тем лучше результат.\n\n"
-        "<i>Пример: закат над горами, в стиле аниме, яркие цвета</i>",
+        f"{PE_EDIT} <b>Измени описание {title}</b>\n\n"
+        "После отправки ты увидишь новое превью и сможешь запустить генерацию.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="img:cancel", style="danger")]
+            [InlineKeyboardButton(
+                text="Показать примеры",
+                callback_data=f"img:examples:{media_type}",
+            )],
+            [InlineKeyboardButton(text="Отмена", callback_data="img:cancel", style="danger")],
         ])
     )
     await callback.answer()
@@ -4311,6 +4513,18 @@ async def cb_img_prompt(callback: CallbackQuery, state: FSMContext):
 @router.message(ImgStates.waiting_prompt, F.text)
 async def fsm_img_prompt(message: Message, state: FSMContext):
     prompt = message.text.strip()
+    if not prompt:
+        await message.answer(
+            "Опиши идею хотя бы несколькими словами — например: "
+            "«уютная кофейня в дождливом городе»."
+        )
+        return
+    if len(prompt) > 1200:
+        await message.answer(
+            "Описание получилось слишком длинным. Сократи его до 1200 символов, "
+            "оставив главные детали."
+        )
+        return
     data = await state.get_data()
     await state.update_data(current_prompt=prompt)
     await state.set_state(ImgStates.has_prompt)
@@ -4321,27 +4535,12 @@ async def fsm_img_prompt(message: Message, state: FSMContext):
         pass
 
     is_video_prompt = data.get("media_type") == "video"
-    kb_rows = [[InlineKeyboardButton(
-        text=("Создать видео" if is_video_prompt else "Создать фото"),
-        callback_data="img:generate",
-        style="success",
-        icon_custom_emoji_id=EMOJI_VIDEO_ID if is_video_prompt else EMOJI_IMAGE_ID,
-    )]]
-    if data.get("media_type") != "video":
-        kb_rows.append([InlineKeyboardButton(
-            text="⚡ HD — максимальное качество",
-            callback_data="img:generate:hd", style="primary"
-        )])
-    kb_rows.append([InlineKeyboardButton(
-        text="Промт",
-        callback_data="img:prompt",
-        icon_custom_emoji_id=EMOJI_EDIT_ID,
-    )])
-    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     text = (
-        f"{IMG_WELCOME_TEXT}\n\n"
-        f"<b>Ваш промт:</b>\n<i>{html_escape(prompt)}</i>"
+        f"{PE_EDIT} <b>Проверь описание</b>\n\n"
+        f"<i>{html_escape(prompt)}</i>\n\n"
+        "Можно запустить генерацию или изменить идею."
     )
+    kb = image_prompt_keyboard(data.get("media_type", "photo"))
 
     img_msg_id = data.get("img_msg_id")
     if img_msg_id:
@@ -4849,50 +5048,22 @@ async def cb_img_generate(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "img:cancel")
 async def cb_img_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Промт",
-            callback_data="img:prompt",
-            icon_custom_emoji_id=EMOJI_EDIT_ID,
-        )]
-    ])
-    await callback.message.edit_text(IMG_WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await callback.message.edit_text(
+        generation_home_text(callback.from_user.id),
+        parse_mode=ParseMode.HTML,
+        reply_markup=generation_home_keyboard(),
+    )
     await callback.answer("Отменено")
 
 
 @router.callback_query(F.data == "img:home")
 async def cb_img_home(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    text = (
-        f"{PE_SPARKLES} <b>Генерация по описанию</b>\n\n"
-        f"{PE_IMAGE} Фото — по текущей цене генерации.\n"
-        f"{PE_VIDEO} Видео — бесплатно."
+    await callback.message.edit_text(
+        generation_home_text(callback.from_user.id),
+        parse_mode=ParseMode.HTML,
+        reply_markup=generation_home_keyboard(),
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Фото",
-            callback_data="img:mode:photo",
-            style="primary",
-            icon_custom_emoji_id=EMOJI_IMAGE_ID,
-        ),
-         InlineKeyboardButton(
-             text="Видео",
-             callback_data="img:mode:video",
-             style="success",
-             icon_custom_emoji_id=EMOJI_VIDEO_ID,
-         )],
-    ])
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    media_id = get_media_file_id("generation")
-    if media_id:
-        try:
-            await callback.message.answer_photo(
-                media_id,
-                caption=f"{PE_SPARKLES} <b>Генерация по описанию</b>",
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception as exc:
-            logger.warning("Фото блока generation не отправлено: %s", exc)
     await callback.answer()
 
 
@@ -5744,28 +5915,86 @@ async def start_search(message: Message, state: FSMContext):
     await state.set_state(SearchStates.waiting_query)
     await state.update_data(search_mode="quick")
     await message.answer(
-        f"{PE_SEARCH} Напиши запрос, который нужно найти в интернете.\n"
-        "Например: <i>какая погода будет в Москве завтра</i>\n\n"
-        "Для подробного разбора сначала нажми кнопку ниже.",
+        f"{PE_SEARCH} <b>Поиск в интернете</b>\n\n"
+        "Напиши вопрос — я найду актуальную информацию и коротко объясню главное.\n\n"
+        "<b>Хороший запрос:</b>\n"
+        "• содержит тему и период: «новости за сегодня»;\n"
+        "• уточняет город, модель или рынок;\n"
+        "• задаёт конкретную задачу: «сравни», «найди цены», «объясни».\n\n"
+        "<i>Например: какая погода будет в Москве завтра</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="Глубокий анализ",
+                text="Глубокий разбор",
                 callback_data="search:deep",
                 style="success",
                 icon_custom_emoji_id=EMOJI_BRAIN_ID,
             )],
+            [InlineKeyboardButton(
+                text="Примеры запросов",
+                callback_data="search:tips",
+                style="primary",
+            )],
         ]),
     )
+
+
+@router.callback_query(F.data == "search:tips")
+async def cb_search_tips(callback: CallbackQuery):
+    await callback.message.edit_text(
+        f"{PE_SEARCH} <b>Примеры запросов</b>\n\n"
+        "• Какие новости о технологиях вышли сегодня?\n"
+        "• Сравни iPhone 15 и Samsung S24 по цене и камере.\n"
+        "• Где купить хороший ноутбук до 100 000 рублей?\n"
+        "• Объясни простыми словами, что такое ...\n"
+        "• Какие отзывы о сервисе или товаре за последний месяц?\n\n"
+        "Просто скопируй пример, измени детали и отправь его.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Назад к быстрому поиску",
+                callback_data="search:quick",
+            )],
+            [InlineKeyboardButton(
+                text="Глубокий разбор",
+                callback_data="search:deep",
+                style="success",
+            )],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "search:quick")
+async def cb_search_quick(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SearchStates.waiting_query)
+    await state.update_data(search_mode="quick")
+    await callback.message.edit_text(
+        f"{PE_SEARCH} <b>Быстрый поиск</b>\n\n"
+        "Напиши вопрос или вставь один из примеров — я найду актуальные данные "
+        "и подготовлю короткий ответ.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Глубокий разбор",
+                callback_data="search:deep",
+                style="success",
+            )],
+        ]),
+    )
+    await callback.answer()
 
 
 async def start_deep_search(message: Message, state: FSMContext):
     await state.set_state(SearchStates.waiting_query)
     await state.update_data(search_mode="deep")
     await message.answer(
-        f"{PE_BRAIN} Напиши тему для глубокого анализа.\n"
-        "Я проверю характеристики, цены в магазинах, обзоры и новости.\n\n"
-        "Например: <i>Сравни iPhone 15 и Samsung S24 по цене и характеристикам "
+        f"{PE_BRAIN} <b>Глубокий разбор</b>\n\n"
+        "Я соберу несколько типов источников, сопоставлю факты и подготовлю "
+        "структурированный отчёт с выводом.\n\n"
+        "<b>Лучше всего подходят:</b> сравнение товаров, цены, отзывы, "
+        "характеристики, новости и изменения за период.\n\n"
+        "<i>Например: сравни iPhone 15 и Samsung S24 по цене и характеристикам "
         "за последний месяц</i>",
         parse_mode=ParseMode.HTML,
     )
@@ -5783,16 +6012,33 @@ async def run_search(message: Message, state: FSMContext, query: str):
         )
         return
 
-    status = await message.answer(f"{PE_SEARCH} Ищу информацию в интернете…", parse_mode=ParseMode.HTML)
+    status = await message.answer(
+        f"{PE_SEARCH} <b>Ищу актуальную информацию…</b>\n"
+        f"<i>{html_escape(query)}</i>",
+        parse_mode=ParseMode.HTML,
+    )
     try:
         results = await search_web(query)
+        await status.edit_text(
+            f"{PE_SEARCH} Нашёл <b>{len(results)}</b> релевантных источников. "
+            "Проверяю совпадения и готовлю краткий ответ…",
+            parse_mode=ParseMode.HTML,
+        )
         answer = await summarize_search_results(query, results)
-        await status.edit_text(answer, parse_mode=None)
+        await status.edit_text(
+            f"🔎 Результат поиска\n"
+            f"Запрос: {query}\n\n"
+            f"{answer}\n\n"
+            f"Проверено источников: {len(results)} · "
+            "для сравнения и цен используй «Глубокий разбор»",
+            parse_mode=None,
+        )
     except Exception as error:
         logger.error("Web search error for user %s: %s", message.from_user.id, error)
         await status.edit_text(
-            "❌ Не удалось выполнить поиск прямо сейчас.\n"
-            "Попробуй изменить запрос и повторить позже."
+            "❌ <b>Не удалось выполнить поиск</b>\n\n"
+            "Попробуй уточнить запрос, убрать лишние слова или повторить чуть позже.",
+            parse_mode=ParseMode.HTML,
         )
 
 
@@ -5809,12 +6055,16 @@ async def run_deep_search(message: Message, state: FSMContext, query: str):
         return
 
     status = await message.answer(
-        f"{PE_BRAIN} Собираю данные из характеристик, магазинов, обзоров и новостей…"
+        f"{PE_BRAIN} <b>Собираю глубокий разбор…</b>\n"
+        f"<i>{html_escape(query)}</i>",
+        parse_mode=ParseMode.HTML,
     )
     try:
         sources = await collect_deep_search_sources(query)
         await status.edit_text(
-            f"{PE_BRAIN} Нашёл {len(sources)} источников. Проверяю цифры и готовлю отчёт…"
+            f"{PE_BRAIN} Нашёл <b>{len(sources)}</b> источников. "
+            "Проверяю цифры, даты и противоречия…",
+            parse_mode=ParseMode.HTML,
         )
         report = await summarize_deep_search(query, sources)
         await status.edit_text(report, parse_mode=None)
@@ -5826,8 +6076,9 @@ async def run_deep_search(message: Message, state: FSMContext, query: str):
             exc_info=True,
         )
         await status.edit_text(
-            "❌ Не удалось подготовить глубокий анализ.\n"
-            "Попробуй повторить запрос немного позже или сформулировать его короче."
+            "❌ <b>Не удалось подготовить глубокий разбор</b>\n\n"
+            "Попробуй сузить тему, добавить период или повторить запрос позже.",
+            parse_mode=ParseMode.HTML,
         )
 
 
@@ -6930,8 +7181,9 @@ async def set_commands(bot: Bot):
         BotCommand(command="new",     description="Новый диалог"),
         BotCommand(command="model",   description="Выбрать модель ИИ"),
         BotCommand(command="role",    description="Выбрать роль ассистента"),
-        BotCommand(command="img",     description="Сгенерировать изображение"),
-        BotCommand(command="search",  description="Поиск в интернете"),
+        BotCommand(command="img",     description="Создать фото или видео"),
+        BotCommand(command="search",  description="Быстрый поиск в интернете"),
+        BotCommand(command="deep",    description="Глубокий разбор с источниками"),
         BotCommand(command="vision",  description="Анализ фото — что на нём"),
         BotCommand(command="status",  description="Текущие настройки"),
         BotCommand(command="profile", description="Мой профиль и ZenoToken"),
