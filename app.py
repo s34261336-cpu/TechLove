@@ -1236,6 +1236,8 @@ MODELS = {
         "emoji_html": pe("5388957777676745182", "🌀"),
         "emoji_id": "5388957777676745182",
         "provider": "openrouter",
+        "disabled": True,
+        "unavailable_reason": "Бесплатный маршрут удалён OpenRouter.",
     },
     "or_gemma4_26b": {
         "name": "Gemma 4 26B",
@@ -1290,6 +1292,8 @@ MODELS = {
         "emoji_html": PE_BRAIN,
         "emoji_id": EMOJI_BRAIN_ID,
         "provider": "openrouter",
+        "disabled": True,
+        "unavailable_reason": "Бесплатный маршрут удалён OpenRouter.",
     },
     "or_nemotron_9b": {
         "name": "Nemotron Nano 9B",
@@ -1299,6 +1303,8 @@ MODELS = {
         "emoji_html": PE_LIGHTNING,
         "emoji_id": EMOJI_LIGHTNING_ID,
         "provider": "openrouter",
+        "disabled": True,
+        "unavailable_reason": "У OpenRouter больше нет доступных endpoints.",
     },
     "mistral_small": {
         "name": "Mistral Small",
@@ -2248,8 +2254,13 @@ user_spam_warned: dict[int, float] = {}
 # ─── Custom exceptions ───────────────────────────────────────────────────────
 
 class RateLimitError(Exception):
-    """Raised when the upstream provider returns a 429 rate-limit error."""
-    pass
+    """Raised when an upstream provider is temporarily unavailable or overloaded."""
+
+    def __init__(self, model_name: str, provider_name: str = "", detail: str = ""):
+        self.model_name = model_name
+        self.provider_name = provider_name
+        self.detail = detail
+        super().__init__(model_name)
 
 
 # ─── FSM States ──────────────────────────────────────────────────────────────
@@ -2469,6 +2480,8 @@ MODEL_STYLES = {
 
 def is_model_available(model: dict) -> bool:
     """Only show models whose provider credentials are configured."""
+    if model.get("disabled"):
+        return False
     provider = model.get("provider", "groq")
     if provider == "sambanova":
         return bool(SAMBANOVA_API_KEY)
@@ -4202,6 +4215,13 @@ async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
     model = MODELS[model_key]
 
+    if model.get("disabled"):
+        await callback.answer(
+            f"{model['name']} отключена: {model.get('unavailable_reason', 'модель недоступна')}",
+            show_alert=True,
+        )
+        return
+
     if not is_model_available(model):
         await callback.answer(
             "Эта модель временно скрыта: для её провайдера не настроен API-ключ.",
@@ -5241,7 +5261,11 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
         )
         if resp.status != 200:
             if transient_status or transient_text:
-                raise RateLimitError(MODELS[session["model"]]["name"])
+                raise RateLimitError(
+                    MODELS[session["model"]]["name"],
+                    provider_name,
+                    error_text,
+                )
             raise ValueError(error_text)
         if isinstance(data, dict) and data.get("error"):
             raise ValueError(error_text)
@@ -5253,7 +5277,12 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
                 "Попробуйте ещё раз или смените модель."
             )
         # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
-        reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+        reply = re.sub(
+            r"<think>.*?(?:</think>|$)",
+            "",
+            reply,
+            flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
         if not reply:
             raise ValueError(
                 "Модель вернула только служебное рассуждение без итогового ответа. "
@@ -6677,9 +6706,9 @@ async def process_text_message(message: Message, text: str):
                 refunded_balance,
             )
         await thinking_msg.edit_text(
-            f"⏳ <b>Модель {e} перегружена.</b>\n\n"
-            f"Бесплатный лимит запросов временно исчерпан у провайдера. "
-            f"Подождите минуту и попробуйте снова, или выберите другую модель.\n\n"
+            f"⏳ <b>Модель {html_escape(e.model_name)} временно перегружена.</b>\n\n"
+            f"Провайдер {html_escape(e.provider_name or 'модели')} "
+            "не успел обработать запрос. Подождите немного или выберите другую модель.\n\n"
             f"{PE_ROBOT} /model — сменить модель",
             parse_mode=ParseMode.HTML
         )
