@@ -2409,7 +2409,10 @@ def get_session(user_id: int) -> dict:
         old_model = user_sessions[user_id].get("model")
         if old_model in MODEL_ALIASES:
             user_sessions[user_id]["model"] = MODEL_ALIASES[old_model]
-        elif user_sessions[user_id].get("model") not in MODELS:
+        elif (
+            user_sessions[user_id].get("model") not in MODELS
+            or not is_model_available(MODELS[user_sessions[user_id]["model"]])
+        ):
             user_sessions[user_id]["model"] = "gpt_oss_120b"
         user_sessions[user_id].setdefault("style", "calm")
         user_sessions[user_id].setdefault("models_filter", "all")
@@ -5069,6 +5072,71 @@ async def cb_img_home(callback: CallbackQuery, state: FSMContext):
 
 # ─── OpenAI-compatible AI APIs ────────────────────────────────────────────────
 
+def provider_label(provider: str) -> str:
+    return {
+        "groq": "GROQ",
+        "seekai": "SeekAI",
+        "sambanova": "SambaNova",
+        "openrouter": "OpenRouter",
+        "mistral": "Mistral",
+        "bai": "Bai",
+    }.get(provider, provider.upper())
+
+
+def extract_ai_reply(data: Any) -> str:
+    """Extract text from common OpenAI-compatible response variants."""
+    if not isinstance(data, dict):
+        return ""
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content")
+        if content is None:
+            content = choice.get("text")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    text = part.get("text") or part.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts).strip()
+        if isinstance(content, dict):
+            text = content.get("text") or content.get("content")
+            if isinstance(text, str):
+                return text.strip()
+
+    for key in ("output_text", "response", "text"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def provider_error_text(provider: str, status: int, data: Any, raw_body: str = "") -> str:
+    """Make provider errors readable without dumping huge JSON to Telegram."""
+    details = ""
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            details = error.get("message") or error.get("detail") or error.get("code") or ""
+        elif isinstance(error, str):
+            details = error
+        if not details:
+            details = data.get("message") or data.get("detail") or ""
+    if not details:
+        details = raw_body.strip()
+    details = re.sub(r"\s+", " ", str(details)).strip()
+    details = details[:360] if details else "провайдер не вернул описание ошибки"
+    return f"{provider_label(provider)} вернул HTTP {status}: {details}"
+
+
 async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | None = None) -> str:
     model_cfg = MODELS[session["model"]]
     model_id = model_cfg["model_id"]
@@ -5129,10 +5197,20 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
     else:
         api_url = GROQ_API_URL
         api_key = GROQ_API_KEY
+    provider_name = provider_label(provider)
+    if not api_key:
+        raise ValueError(
+            f"{provider_name} не настроен в боте. Выберите другую доступную модель."
+        )
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    if provider == "openrouter":
+        headers.update({
+            "HTTP-Referer": "https://replit.com",
+            "X-Title": "Zeno AI",
+        })
     try:
         async with shared_http_session() as http:
             async with http.post(
@@ -5141,22 +5219,46 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=90, connect=10, sock_read=80),
             ) as resp:
-                data = await resp.json()
-        if "choices" not in data:
-            err = data.get("error", {})
-            code = err.get("code") or data.get("code")
-            error_msg = err.get("message", json.dumps(data, ensure_ascii=False))
-            # 429 or "high demand" / "overloaded" messages → rate limit
-            if code == 429 or any(kw in error_msg.lower() for kw in ("high demand", "overloaded", "try again later", "rate limit")):
+                raw_body = await resp.text()
+                try:
+                    data = json.loads(raw_body) if raw_body else {}
+                except json.JSONDecodeError:
+                    data = {}
+
+        error_text = provider_error_text(provider, resp.status, data, raw_body)
+        error_lower = error_text.casefold()
+        transient_status = resp.status in {408, 409, 425, 429} or 500 <= resp.status < 600
+        transient_text = any(
+            keyword in error_lower
+            for keyword in (
+                "high demand",
+                "overloaded",
+                "try again later",
+                "rate limit",
+                "temporarily unavailable",
+                "capacity",
+            )
+        )
+        if resp.status != 200:
+            if transient_status or transient_text:
                 raise RateLimitError(MODELS[session["model"]]["name"])
-            raise ValueError(error_msg)
-        reply = data["choices"][0]["message"]["content"]
-        # compound-beta may return None content when it only emitted tool calls
-        # without a final text — treat as a retryable error so history stays clean
-        if reply is None:
-            raise ValueError("Модель не вернула текстовый ответ. Попробуйте ещё раз или смените модель (/model).")
+            raise ValueError(error_text)
+        if isinstance(data, dict) and data.get("error"):
+            raise ValueError(error_text)
+
+        reply = extract_ai_reply(data)
+        if not reply:
+            raise ValueError(
+                f"{provider_name} не вернул текстовый ответ. "
+                "Попробуйте ещё раз или смените модель."
+            )
         # Strip chain-of-thought thinking blocks (DeepSeek R1, Qwen3, Groq Compound, etc.)
         reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+        if not reply:
+            raise ValueError(
+                "Модель вернула только служебное рассуждение без итогового ответа. "
+                "Попробуйте ещё раз или смените модель."
+            )
         session["history"].append({"role": "assistant", "content": reply})
         return reply
     except Exception:
@@ -6489,6 +6591,7 @@ async def process_text_message(message: Message, text: str):
 
     # ZenoToken check & deduction for paid models (admin and VIP exempt)
     token_price = get_model_price(session["model"])
+    token_charged = False
     if token_price > 0 and not is_admin(user_id) and not is_vip(user_id):
         profile = get_user_profile(user_id)
         balance = profile.get("zenotoken", 0)
@@ -6519,6 +6622,7 @@ async def process_text_message(message: Message, text: str):
                 parse_mode=ParseMode.HTML,
             )
             return
+        token_charged = True
 
     thinking_msg = await message.answer(
         f"⏳ <i>{model['emoji_html']} {model['name']} думает...</i>",
@@ -6564,6 +6668,14 @@ async def process_text_message(message: Message, text: str):
 
     except RateLimitError as e:
         logger.warning(f"Rate limit for user {user_id}: {e}")
+        if token_charged:
+            refunded_balance = give_tokens(user_id, token_price)
+            logger.info(
+                "Refunded %s ZenoToken after temporary provider failure for user %s; balance=%s",
+                token_price,
+                user_id,
+                refunded_balance,
+            )
         await thinking_msg.edit_text(
             f"⏳ <b>Модель {e} перегружена.</b>\n\n"
             f"Бесплатный лимит запросов временно исчерпан у провайдера. "
@@ -6573,7 +6685,15 @@ async def process_text_message(message: Message, text: str):
         )
     except Exception as e:
         logger.error(f"AI error for user {user_id}: {e}")
-        err = str(e)[:300]
+        if token_charged:
+            refunded_balance = give_tokens(user_id, token_price)
+            logger.info(
+                "Refunded %s ZenoToken after model error for user %s; balance=%s",
+                token_price,
+                user_id,
+                refunded_balance,
+            )
+        err = html_escape(str(e)[:300])
         await thinking_msg.edit_text(
             f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
             parse_mode=ParseMode.HTML
