@@ -1486,6 +1486,36 @@ def load_users() -> dict:
             return {}
     return {}
 
+async def refresh_user_balances_from_supabase(user_id: int) -> bool:
+    """Refresh billing fields from the remote users snapshot before displaying them."""
+    state_value = await load_state_snapshot("users")
+    if not isinstance(state_value, dict):
+        return False
+
+    remote_profile = state_value.get(str(user_id))
+    if not isinstance(remote_profile, dict):
+        return False
+
+    data = load_users()
+    local_profile = data.get(str(user_id))
+    if not isinstance(local_profile, dict):
+        local_profile = dict(remote_profile)
+        data[str(user_id)] = local_profile
+
+    changed = False
+    for field in ("zenotoken", "free_gens"):
+        value = remote_profile.get(field)
+        if isinstance(value, int) and not isinstance(value, bool):
+            if local_profile.get(field) != value:
+                local_profile[field] = value
+                changed = True
+
+    if changed:
+        # Do not enqueue another remote write while applying the remote snapshot.
+        save_json_atomically(USERS_FILE, data)
+    return changed
+
+
 def save_users(data: dict):
     save_json_atomically(USERS_FILE, data)
     schedule_state_snapshot("users", data)
@@ -2974,6 +3004,7 @@ def profile_actions_keyboard() -> InlineKeyboardMarkup:
 @router.message(F.text == "👤 Профиль")
 async def cmd_profile(message: Message):
     user = message.from_user
+    await refresh_user_balances_from_supabase(user.id)
     profile = get_user_profile(user.id, user.first_name, user.username or "")
     username_str = f"@{profile['username']}" if profile.get("username") else "—"
     session = get_session(user.id)
@@ -6622,6 +6653,7 @@ async def process_text_message(message: Message, text: str):
     token_price = get_model_price(session["model"])
     token_charged = False
     if token_price > 0 and not is_admin(user_id) and not is_vip(user_id):
+        await refresh_user_balances_from_supabase(user_id)
         profile = get_user_profile(user_id)
         balance = profile.get("zenotoken", 0)
         if balance < token_price:
