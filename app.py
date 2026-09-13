@@ -21,10 +21,11 @@ from io import BytesIO
 import base64
 from html import escape as html_escape
 from html.parser import HTMLParser
+from itertools import count
 
 from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.enums import ParseMode
+from aiogram.enums import ChatType, ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 JSON_WRITE_LOCK = threading.RLock()
 _http_session: aiohttp.ClientSession | None = None
 _http_session_loop: asyncio.AbstractEventLoop | None = None
+_MESSAGE_DRAFT_IDS = count(1)
 HTTP_DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=25)
 
 
@@ -737,12 +739,62 @@ def format_favorite_date(value: Any) -> str:
         return "дата неизвестна"
 
 
+def draft_preview_text(text: str, parse_mode: ParseMode | str | None) -> str:
+    """Return plain text suitable for an unformatted Telegram message draft."""
+    preview = text
+    if parse_mode == ParseMode.HTML:
+        preview = re.sub(r"</?[^>]+?>", "", preview)
+    elif parse_mode == ParseMode.MARKDOWN:
+        preview = re.sub(r"(```|`|\*\*|__|~~|\*|_)", "", preview)
+    return preview[:4096]
+
+
+async def send_message_draft_preview(
+    message: Message,
+    text: str,
+    parse_mode: ParseMode | str | None = None,
+) -> None:
+    """Animate a private-chat response with Telegram's ephemeral message draft."""
+    if message.chat.type != ChatType.PRIVATE or not text:
+        return
+
+    preview = draft_preview_text(text, parse_mode)
+    if not preview:
+        return
+
+    draft_id = next(_MESSAGE_DRAFT_IDS)
+    # Keep the number of API calls bounded while still making short answers
+    # feel animated. Drafts are plain text because partial HTML/Markdown can
+    # contain incomplete entities and be rejected by Telegram.
+    updates = min(24, max(2, math.ceil(len(preview) / 24)))
+    step = max(1, math.ceil(len(preview) / updates))
+    try:
+        for end in range(step, len(preview), step):
+            await message.bot.send_message_draft(
+                chat_id=message.chat.id,
+                draft_id=draft_id,
+                text=preview[:end],
+            )
+            await asyncio.sleep(0.12)
+        await message.bot.send_message_draft(
+            chat_id=message.chat.id,
+            draft_id=draft_id,
+            text=preview,
+        )
+        await asyncio.sleep(0.12)
+    except Exception as exc:
+        # The final message must still be delivered if drafts are unavailable
+        # or Telegram temporarily rejects one of the preview updates.
+        logger.debug("Message draft preview unavailable for %s: %s", message.chat.id, exc)
+
+
 async def answer_and_track(
     message: Message,
     text: str,
     **kwargs,
 ) -> Message:
     """Send a text reply and index it for later reply-based saving."""
+    await send_message_draft_preview(message, text, kwargs.get("parse_mode"))
     sent = await message.answer(text, **kwargs)
     if sent.text:
         # Put the source in the in-process cache before yielding again. This

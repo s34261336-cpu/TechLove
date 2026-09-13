@@ -7,3 +7,4 @@
 - [Groq model lifecycle](groq-model-lifecycle.md) — retired Llama model IDs can fail even when the API key works; keep current Groq IDs and a fallback.
 - [BotHost runtime dependencies](bothost-runtime-dependencies.md) — BotHost may parse entry points as Python and does not inherit Replit's Nix packages.
 - [Telegram reaction delivery](telegram-reactions.md) — message reactions require bot admin rights, so private chats need an inline save fallback.
+- [Telegram message drafts](telegram-message-drafts.md) — sendMessageDraft is private-chat-only and must be followed by a normal message to persist the response.
