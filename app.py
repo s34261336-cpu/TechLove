@@ -101,7 +101,7 @@ def save_json_atomically(filename: str, data: Any) -> None:
 
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 SUPABASE_FACTS_URL = f"{SUPABASE_URL}/rest/v1/user_facts" if SUPABASE_URL else ""
@@ -1387,7 +1387,10 @@ MODELS = {
 def load_radoxai_models() -> int:
     """Register the provider's current public chat catalog from the local file."""
     try:
-        catalog_path = os.path.join(PROJECT_DIR, "radoxai_catalog.json")
+        catalog_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "radoxai_catalog.json",
+        )
         with open(catalog_path, "r", encoding="utf-8") as catalog_file:
             entries = json.load(catalog_file)
     except (OSError, json.JSONDecodeError) as error:
@@ -2542,7 +2545,7 @@ class AntiSpamMiddleware(BaseMiddleware):
 def get_session(user_id: int) -> dict:
     if user_id not in user_sessions:
         user_sessions[user_id] = {
-            "model": "gpt_oss_120b",
+            "model": get_default_model_key(),
             "role": "default",
             "style": "calm",
             "history": [],
@@ -2558,10 +2561,24 @@ def get_session(user_id: int) -> dict:
             user_sessions[user_id].get("model") not in MODELS
             or not is_model_available(MODELS[user_sessions[user_id]["model"]])
         ):
-            user_sessions[user_id]["model"] = "gpt_oss_120b"
+            user_sessions[user_id]["model"] = get_default_model_key()
         user_sessions[user_id].setdefault("style", "calm")
         user_sessions[user_id].setdefault("models_filter", "all")
     return user_sessions[user_id]
+
+
+def get_default_model_key() -> str:
+    """Prefer Groq when configured, otherwise use the first ready provider."""
+    preferred = "gpt_oss_120b"
+    if preferred in MODELS and is_model_available(MODELS[preferred]):
+        return preferred
+    for model_key, model in MODELS.items():
+        if model.get("provider") == "radoxai" and is_model_available(model):
+            return model_key
+    for model_key, model in MODELS.items():
+        if is_model_available(model):
+            return model_key
+    return preferred
 
 
 # ─── Keyboards ───────────────────────────────────────────────────────────────
@@ -2623,10 +2640,14 @@ def is_model_available(model: dict) -> bool:
         return bool(OPENROUTER_API_KEY)
     if provider == "mistral":
         return bool(MISTRAL_API_KEY)
+    if provider == "bai":
+        return bool(BAI_API_KEY)
     if provider == "seekai":
         return bool(SEEKAI_API_KEY)
     if provider == "radoxai":
         return bool(RADOXAI_API_KEY)
+    if provider == "groq":
+        return bool(GROQ_API_KEY)
     return True
 
 
