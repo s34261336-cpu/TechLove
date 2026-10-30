@@ -1,0 +1,167 @@
+[
+  {
+    "id": "gemma-2-2b",
+    "name": "Gemma 2 2B",
+    "description": "Лёгкая модель Google для быстрых повседневных ответов."
+  },
+  {
+    "id": "deepseek-v4-flash-0731",
+    "name": "DeepSeek-V4-Flash-0731",
+    "description": "Быстрая открытая модель DeepSeek с сильными рассуждениями."
+  },
+  {
+    "id": "gpt-5.6-luna",
+    "name": "GPT-5.6 Luna",
+    "description": "Экономичная модель OpenAI для быстрых ответов и рассуждений."
+  },
+  {
+    "id": "deepseek-v4-pro-0813",
+    "name": "DeepSeek-V4-Pro-0813",
+    "description": "Мощная модель DeepSeek для рассуждений и программирования."
+  },
+  {
+    "id": "qwen3.8-27b",
+    "name": "Qwen3.8-27B",
+    "description": "Компактная модель Qwen с хорошим балансом скорости и качества."
+  },
+  {
+    "id": "seed-2.1-turbo",
+    "name": "Seed 2.1 Turbo",
+    "description": "Быстрая модель ByteDance для рассуждений и программирования."
+  },
+  {
+    "id": "seed-2.1-pro",
+    "name": "Seed 2.1 Pro",
+    "description": "Модель ByteDance для сложных рассуждений и программирования."
+  },
+  {
+    "id": "kimi-k2.6",
+    "name": "Kimi K2.6",
+    "description": "Модель Moonshot для рассуждений и программирования."
+  },
+  {
+    "id": "gemini-3.7-flash",
+    "name": "Gemini 3.7 Flash",
+    "description": "Быстрая модель Google с поддержкой рассуждений."
+  },
+  {
+    "id": "glm-5.3",
+    "name": "GLM-5.3",
+    "description": "Модель Zhipu AI с сильными рассуждениями и агентными возможностями."
+  },
+  {
+    "id": "glm-5.2",
+    "name": "GLM-5.2",
+    "description": "Открытая модель Zhipu AI для рассуждений и программирования."
+  },
+  {
+    "id": "qwen3.8-max",
+    "name": "Qwen3.8 Max",
+    "description": "Флагманская модель Qwen для широкого круга задач."
+  },
+  {
+    "id": "qwen3.7-max",
+    "name": "Qwen3.7 Max",
+    "description": "Продвинутая модель Qwen для рассуждений и программирования."
+  },
+  {
+    "id": "muse-spark-1.1",
+    "name": "Muse Spark 1.1",
+    "description": "Модель Meta для быстрых ответов и сложных рассуждений."
+  },
+  {
+    "id": "deepseek-v4-pro-max",
+    "name": "DeepSeek-V4-Pro-Max",
+    "description": "Флагманская модель DeepSeek для сложных задач."
+  },
+  {
+    "id": "gemini-3.6-flash",
+    "name": "Gemini 3.6 Flash",
+    "description": "Быстрая модель Google для повседневных задач."
+  },
+  {
+    "id": "grok-4.5",
+    "name": "Grok 4.5",
+    "description": "Модель xAI для рассуждений и агентных задач."
+  },
+  {
+    "id": "grok-4.6",
+    "name": "Grok 4.6",
+    "description": "Модель xAI для программирования и сложных рассуждений."
+  },
+  {
+    "id": "claude-sonnet-5",
+    "name": "Claude Sonnet 5",
+    "description": "Сбалансированная модель Anthropic для кода и сложных ответов."
+  },
+  {
+    "id": "gpt-5.6-terra",
+    "name": "GPT-5.6 Terra",
+    "description": "Модель OpenAI для рассуждений и программирования."
+  },
+  {
+    "id": "gemini-3.1-pro",
+    "name": "Gemini 3.1 Pro",
+    "description": "Профессиональная модель Google для кода и анализа."
+  },
+  {
+    "id": "kimi-k3",
+    "name": "Kimi K3",
+    "description": "Флагманская модель Moonshot для рассуждений и программирования."
+  },
+  {
+    "id": "claude-opus-5",
+    "name": "Claude Opus 5",
+    "description": "Мощная модель Anthropic для сложных рассуждений и агентных задач."
+  },
+  {
+    "id": "claude-mythos-preview",
+    "name": "Claude Mythos Preview",
+    "description": "Предварительная версия модели Anthropic."
+  },
+  {
+    "id": "claude-opus-4.8",
+    "name": "Claude Opus 4.8",
+    "description": "Модель Anthropic для рассуждений и программирования."
+  },
+  {
+    "id": "claude-opus-4.6",
+    "name": "Claude Opus 4.6",
+    "description": "Модель Anthropic для рассуждений и агентных задач."
+  },
+  {
+    "id": "claude-opus-4.7",
+    "name": "Claude Opus 4.7",
+    "description": "Модель Anthropic для кода и сложных рассуждений."
+  },
+  {
+    "id": "claude-opus-5.5",
+    "name": "Claude Opus 5.5",
+    "description": "Модель Anthropic для сложных рассуждений и агентных задач."
+  },
+  {
+    "id": "gpt-5.6-sol",
+    "name": "GPT-5.6 Sol",
+    "description": "Флагманская модель OpenAI для кода, рассуждений и агентных задач."
+  },
+  {
+    "id": "gpt-5.5",
+    "name": "GPT-5.5",
+    "description": "Модель OpenAI для рассуждений и программирования."
+  },
+  {
+    "id": "gpt-5.5-pro",
+    "name": "GPT-5.5 Pro",
+    "description": "Продвинутая модель OpenAI для рассуждений и программирования."
+  },
+  {
+    "id": "claude-fable-5",
+    "name": "Claude Fable 5",
+    "description": "Премиальная модель Anthropic для кода и сложных рассуждений."
+  },
+  {
+    "id": "claude-fable-5.1",
+    "name": "Claude Fable 5.1",
+    "description": "Премиальная модель Anthropic для кода и сложных рассуждений."
+  }
+]

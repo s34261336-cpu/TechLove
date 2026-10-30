@@ -5,6 +5,7 @@
 - [Imported Python runtime](python-runtime-import.md) — check for a managed Python runtime before installing dependencies for imported applications.
 - [Web search provider](web-search-provider.md) — prefer Bing HTML results with DuckDuckGo as fallback; DDG can return HTTP 200 with no parsed results here.
 - [Groq model lifecycle](groq-model-lifecycle.md) — retired Llama model IDs can fail even when the API key works; keep current Groq IDs and a fallback.
+- [RadoxAI model pricing](radoxai-model-pricing.md) — user chose free access for bot users, with provider usage billed to the owner's RadoxAI balance.
 - [BotHost runtime dependencies](bothost-runtime-dependencies.md) — BotHost may parse entry points as Python and does not inherit Replit's Nix packages.
 - [Telegram reaction delivery](telegram-reactions.md) — message reactions require bot admin rights, so private chats need an inline save fallback.
 - [Telegram message drafts](telegram-message-drafts.md) — sendMessageDraft is private-chat-only and must be followed by a normal message to persist the response.

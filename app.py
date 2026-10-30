@@ -125,7 +125,6 @@ BAI_API_URL = "https://api.b.ai/v1/chat/completions"
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 RADOXAI_API_KEY = os.environ.get("RADOXAI_API_KEY", "")
-RADOXAI_MODELS_URL = "https://radoxai.com/v1/models"
 RADOXAI_CHAT_URL = "https://radoxai.com/v1/chat/completions"
 
 # Local speech-to-text settings. The model is downloaded only on the first
@@ -1385,35 +1384,18 @@ MODELS = {
 }
 
 
-async def load_radoxai_models() -> int:
-    """Load the provider's active chat catalog once during bot startup."""
-    if not RADOXAI_API_KEY:
-        return 0
-
+def load_radoxai_models() -> int:
+    """Register the provider's current public chat catalog from the local file."""
     try:
-        async with shared_http_session() as http:
-            async with http.get(
-                RADOXAI_MODELS_URL,
-                headers={"Authorization": f"Bearer {RADOXAI_API_KEY}"},
-                timeout=aiohttp.ClientTimeout(total=20, connect=10),
-            ) as response:
-                if response.status >= 400:
-                    logger.warning(
-                        "RadoxAI model discovery failed (HTTP %s).",
-                        response.status,
-                    )
-                    return 0
-                payload = await response.json(content_type=None)
-    except Exception as error:
-        logger.warning(
-            "RadoxAI model discovery failed (%s).",
-            type(error).__name__,
-        )
+        catalog_path = os.path.join(PROJECT_DIR, "radoxai_catalog.json")
+        with open(catalog_path, "r", encoding="utf-8") as catalog_file:
+            entries = json.load(catalog_file)
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("Could not load the RadoxAI catalog (%s).", type(error).__name__)
         return 0
 
-    entries = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(entries, list):
-        logger.warning("RadoxAI returned an unexpected model catalog.")
+        logger.warning("RadoxAI catalog must contain a list of models.")
         return 0
 
     loaded_keys = set()
@@ -1421,7 +1403,7 @@ async def load_radoxai_models() -> int:
         if not isinstance(entry, dict):
             continue
         model_id = str(entry.get("id") or "").strip()
-        if not model_id or str(entry.get("type") or "chat").lower() != "chat":
+        if not model_id:
             continue
 
         slug = re.sub(r"[^a-zA-Z0-9]+", "_", model_id).strip("_").lower()
@@ -7512,7 +7494,7 @@ async def main():
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
-    radoxai_model_count = await load_radoxai_models()
+    radoxai_model_count = load_radoxai_models()
     dp = Dispatcher(storage=MemoryStorage())
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
