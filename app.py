@@ -178,10 +178,6 @@ MEDIA_BLOCKS = {
         "label": "Помощь",
         "description": "справка по возможностям бота",
     },
-    "cases": {
-        "label": "Кейсы",
-        "description": "список кейсов",
-    },
 }
 
 
@@ -1124,9 +1120,13 @@ EMOJI_RESTRICTED_PERM = "5278578973595427038"
 EMOJI_RESTRICTED_TEMP = "5276240711795107620"
 
 
-def get_model_emoji_id(model_key: str) -> str:
+def get_model_emoji_id(model_key: str, restrictions: dict | None = None) -> str:
     """Return the emoji_id to display for a model based on its restriction state."""
-    r = get_model_restriction(model_key)
+    r = (
+        get_model_restriction(model_key)
+        if restrictions is None
+        else restrictions.get(model_key)
+    )
     if r:
         if r["type"] == "temporary":
             return EMOJI_RESTRICTED_TEMP
@@ -2090,6 +2090,38 @@ def get_model_price(model_key: str) -> int:
     data = load_restrictions()
     return data.get("_prices", {}).get(model_key, 0)
 
+
+def get_model_catalog_state() -> tuple[dict, dict]:
+    """Load prices and restrictions once per catalog render, expiring old locks."""
+    data = load_restrictions()
+    if not isinstance(data, dict):
+        return {}, {}
+
+    now = time.time()
+    expired = []
+    for model_key, restriction in data.items():
+        if not isinstance(restriction, dict) or restriction.get("type") != "temporary":
+            continue
+        try:
+            until = float(restriction.get("until") or 0)
+        except (TypeError, ValueError):
+            continue
+        if until and now > until:
+            expired.append(model_key)
+
+    for model_key in expired:
+        data.pop(model_key, None)
+    if expired:
+        save_restrictions(data)
+
+    restrictions = {
+        key: value
+        for key, value in data.items()
+        if key != "_prices" and isinstance(value, dict)
+    }
+    prices = data.get("_prices", {})
+    return restrictions, prices if isinstance(prices, dict) else {}
+
 def set_model_price(model_key: str, price: int):
     data = load_restrictions()
     if "_prices" not in data:
@@ -2615,6 +2647,7 @@ def get_session(user_id: int) -> dict:
             "history": [],
             "temperature": 0.7,
             "models_filter": "all",
+            "model_family": None,
         }
     else:
         # Ensure older sessions have the style key
@@ -2636,6 +2669,7 @@ def get_session(user_id: int) -> dict:
             user_sessions[user_id]["model"] = get_default_model_key()
         user_sessions[user_id].setdefault("style", "calm")
         user_sessions[user_id].setdefault("models_filter", "all")
+        user_sessions[user_id].setdefault("model_family", None)
     return user_sessions[user_id]
 
 
@@ -2718,12 +2752,12 @@ def main_keyboard(user_id: int = 0) -> ReplyKeyboardMarkup:
         return KeyboardButton(text=text, style=style, icon_custom_emoji_id=emoji_id)
 
     buttons = [
-        [button("Модель", "primary", EMOJI_ROBOT_ID), button("Роль", "success", EMOJI_ROLE_ID)],
+        [button("Модели", "primary", EMOJI_ROBOT_ID), button("Роль", "success", EMOJI_ROLE_ID)],
         [button("Настройки", "primary", EMOJI_SETTINGS_ID),
          button("Новый диалог", "danger", EMOJI_TRASH_ID)],
         [button("Генерация", "success", EMOJI_SPARKLES_ID),
          button("Профиль", "primary", EMOJI_USER_ID)],
-        [button("Найди в интернете", "primary", EMOJI_SEARCH_ID)],
+        [button("Поиск в интернете", "primary", EMOJI_SEARCH_ID)],
     ]
     if user_id == ADMIN_ID:
         buttons.append([button("🛡 Админ панель", "danger")])
@@ -2781,83 +2815,245 @@ def is_model_available(model: dict) -> bool:
     return True
 
 
-def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMarkup:
-    # ── Filter row at the top ──────────────────────────────────────────────────
-    FILTER_STYLES = {"all": "primary", "free": "success", "paid": "danger"}
-    filter_row = []
-    for key, label, emoji_id in [
-        ("all", "📋 Все", None),
-        ("free", "🆓 Бесплатные", None),
-        ("paid", "Платные", EMOJI_COIN_ID),
-    ]:
-        active = filter_mode == key
-        btn = InlineKeyboardButton(
-            text=f"✅ {label}" if active else label,
-            callback_data=f"mfilter:{key}",
-            icon_custom_emoji_id=emoji_id,
-        )
-        btn.style = FILTER_STYLES[key]
-        filter_row.append(btn)
+MODEL_FAMILY_DEFINITIONS = (
+    ("gpt", "GPT", "🤖", ("gpt", "openai/")),
+    ("claude", "Claude", "🟣", ("claude", "anthropic/")),
+    ("gemini", "Gemini", "✨", ("gemini",)),
+    ("deepseek", "DeepSeek", "🔭", ("deepseek",)),
+    ("qwen", "Qwen", "🔮", ("qwen",)),
+    ("llama", "Llama", "🦙", ("llama",)),
+    ("gemma", "Gemma", "💎", ("gemma",)),
+    ("mistral", "Mistral", "🇫🇷", ("mistral", "codestral")),
+    ("minimax", "MiniMax", "🚀", ("minimax",)),
+    ("grok", "Grok", "⚡", ("grok", "xai/")),
+    ("nvidia", "NVIDIA", "🟢", ("nvidia/", "nemotron")),
+    ("kimi", "Kimi", "🌙", ("kimi", "moonshot")),
+    ("phi", "Phi", "🔹", ("phi-",)),
+    ("cohere", "Cohere", "🔷", ("cohere", "command-r")),
+    ("glm", "GLM", "🧩", ("glm", "zhipu")),
+    ("other", "Другие", "📚", ()),
+)
+MODEL_FAMILY_INFO = {
+    key: (label, emoji)
+    for key, label, emoji, _patterns in MODEL_FAMILY_DEFINITIONS
+}
+MODEL_ROUTE_LABELS = {
+    "anymodel": "AnyModel",
+    "groq": "Groq",
+    "seekai": "SeekAI",
+    "sambanova": "SambaNova",
+    "openrouter": "OpenRouter",
+    "mistral": "Mistral API",
+}
 
-    # ── Models grouped by provider ────────────────────────────────────────────
-    PROVIDER_GROUPS = [
-        ("groq",       "GROQ", EMOJI_LIGHTNING_ID),
-        ("seekai",     "🧭 SEEKAI", None),
-        ("sambanova",  "🔥 SAMBANOVA", None),
-        ("openrouter", "🌐 OPENROUTER", None),
-        ("mistral",    "🇫🇷 MISTRAL", None),
-        ("anymodel",   "🧠 ANYMODEL", None),
+
+def get_model_family_key(model: dict) -> str:
+    search_text = " ".join(
+        str(model.get(field) or "")
+        for field in ("button_name", "name", "model_id")
+    ).casefold()
+    for family_key, _label, _emoji, patterns in MODEL_FAMILY_DEFINITIONS:
+        if patterns and any(pattern in search_text for pattern in patterns):
+            return family_key
+    return "other"
+
+
+def group_models_by_family(model_items) -> list[tuple[str, str, str, list]]:
+    grouped = defaultdict(list)
+    for model_key, model in model_items:
+        grouped[get_model_family_key(model)].append((model_key, model))
+    return [
+        (family_key, label, emoji, grouped[family_key])
+        for family_key, label, emoji, _patterns in MODEL_FAMILY_DEFINITIONS
+        if grouped.get(family_key)
     ]
 
+
+def filtered_available_models(filter_mode: str, prices: dict) -> list[tuple[str, dict]]:
+    models = []
+    for model_key, model in MODELS.items():
+        if not is_model_available(model):
+            continue
+        try:
+            price = int(prices.get(model_key, 0) or 0)
+        except (TypeError, ValueError):
+            price = 0
+        if filter_mode == "free" and price > 0:
+            continue
+        if filter_mode == "paid" and price <= 0:
+            continue
+        models.append((model_key, model))
+    return models
+
+
+def model_picker_label(model_key: str, model: dict, family_models: list) -> str:
+    label = str(model.get("button_name") or model["name"])
+    duplicates = sum(
+        1
+        for other_key, other in family_models
+        if other_key != model_key
+        and str(other.get("button_name") or other["name"]).casefold() == label.casefold()
+    )
+    if duplicates:
+        route = MODEL_ROUTE_LABELS.get(
+            str(model.get("provider", "groq")),
+            str(model.get("provider", "API")).replace("_", " ").title(),
+        )
+        label = f"{label} · {route}"
+    return label[:42]
+
+
+def models_screen_text(current: str, family_key: str | None = None) -> str:
+    current_model = MODELS.get(current)
+    current_line = (
+        f"Сейчас выбрана: {current_model['emoji_html']} <b>{current_model['name']}</b>\n"
+        f"<i>{current_model['description']}</i>"
+        if current_model
+        else "Модель пока не выбрана."
+    )
+    if family_key in MODEL_FAMILY_INFO:
+        family_label, family_emoji = MODEL_FAMILY_INFO[family_key]
+        return (
+            f"{family_emoji} <b>{family_label}</b>\n\n"
+            f"{current_line}\n\n"
+            "Выберите модель из этого семейства."
+        )
+    return (
+        f"{PE_ROBOT} <b>Каталог моделей</b>\n\n"
+        f"{current_line}\n\n"
+        "Выберите семейство — например, GPT. Внутри собраны все доступные "
+        "модели этого типа."
+    )
+
+
+async def edit_models_message(
+    callback: CallbackQuery,
+    text: str,
+    keyboard: InlineKeyboardMarkup,
+) -> None:
+    message = callback.message
+    if message.photo:
+        await message.edit_caption(
+            caption=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+    else:
+        await message.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+
+
+def models_keyboard(
+    current: str,
+    filter_mode: str = "all",
+    family_key: str | None = None,
+    catalog_state: tuple[dict, dict] | None = None,
+) -> InlineKeyboardMarkup:
+    if filter_mode not in {"all", "free", "paid"}:
+        filter_mode = "all"
+    if family_key not in MODEL_FAMILY_INFO:
+        family_key = None
+
+    filter_styles = {"all": "primary", "free": "success", "paid": "danger"}
+    filter_row = []
+    for key, label, emoji_id in [
+        ("all", "Все", None),
+        ("free", "Бесплатные", None),
+        ("paid", "Платные", EMOJI_COIN_ID),
+    ]:
+        button = InlineKeyboardButton(
+            text=f"✓ {label}" if filter_mode == key else label,
+            callback_data=f"mfilter:{key}:{family_key or 'root'}",
+            icon_custom_emoji_id=emoji_id,
+        )
+        button.style = filter_styles[key]
+        filter_row.append(button)
+
+    restrictions, prices = (
+        get_model_catalog_state()
+        if catalog_state is None
+        else catalog_state
+    )
+    visible_models = filtered_available_models(filter_mode, prices)
     rows: list[list[InlineKeyboardButton]] = [
         filter_row,
         [InlineKeyboardButton(
-            text="ℹ️ Цена указана рядом с названием · ✅ — выбрано",
+            text="Цена в ZenoToken · ✓ — выбрана",
             callback_data="noop",
         )],
     ]
-    any_model = False
 
-    for provider_key, provider_label, provider_emoji_id in PROVIDER_GROUPS:
-        group_btns: list[InlineKeyboardButton] = []
-        for key, model in MODELS.items():
-            if model.get("provider", "groq") != provider_key:
-                continue
-            if not is_model_available(model):
-                continue
-            price = get_model_price(key)
-            is_paid = price > 0
-            if filter_mode == "free" and is_paid:
-                continue
-            if filter_mode == "paid" and not is_paid:
-                continue
-
-            check = "✅ " if key == current else ""
-            price_tag = f" · {price}" if is_paid else ""
-            btn = InlineKeyboardButton(
-                text=f"{check}{model.get('button_name', model['name'])}{price_tag}",
-                callback_data=f"model:{key}",
-                icon_custom_emoji_id=get_model_emoji_id(key),
+    if family_key is None:
+        selected_family = (
+            get_model_family_key(MODELS[current])
+            if current in MODELS
+            else None
+        )
+        family_buttons = []
+        for key, label, emoji, models in group_models_by_family(visible_models):
+            button = InlineKeyboardButton(
+                text=f"{emoji} {label} · {len(models)}",
+                callback_data=f"mfamily:{key}",
             )
-            btn.style = MODEL_STYLES.get(key, "primary")
-            group_btns.append(btn)
+            button.style = "success" if key == selected_family else "primary"
+            family_buttons.append(button)
+        rows.extend(
+            family_buttons[index:index + 2]
+            for index in range(0, len(family_buttons), 2)
+        )
+        if not family_buttons:
+            rows.append([InlineKeyboardButton(
+                text="В этой категории сейчас нет моделей",
+                callback_data="noop",
+            )])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
-        if not group_btns:
-            continue
+    family_info = MODEL_FAMILY_INFO[family_key]
+    family_models = next(
+        (
+            models
+            for key, _label, _emoji, models in group_models_by_family(visible_models)
+            if key == family_key
+        ),
+        [],
+    )
+    rows.append([InlineKeyboardButton(
+        text=f"{family_info[1]} {family_info[0]}",
+        callback_data="noop",
+    )])
 
-        any_model = True
-        # Section divider (full-width, non-clickable label)
+    model_buttons = []
+    for model_key, model in family_models:
+        try:
+            price = int(prices.get(model_key, 0) or 0)
+        except (TypeError, ValueError):
+            price = 0
+        check = "✓ " if model_key == current else ""
+        price_tag = f" · {price} ZT" if price > 0 else " · бесплатно"
+        button = InlineKeyboardButton(
+            text=f"{check}{model_picker_label(model_key, model, family_models)}{price_tag}",
+            callback_data=f"model:{model_key}",
+            icon_custom_emoji_id=get_model_emoji_id(model_key, restrictions),
+        )
+        button.style = MODEL_STYLES.get(model_key, "primary")
+        model_buttons.append(button)
+
+    rows.extend(
+        model_buttons[index:index + 2]
+        for index in range(0, len(model_buttons), 2)
+    )
+    if not model_buttons:
         rows.append([InlineKeyboardButton(
-            text=f"━━━ {provider_label} ━━━",
+            text="В этой категории сейчас нет моделей",
             callback_data="noop",
-            icon_custom_emoji_id=provider_emoji_id,
         )])
-        # 2 models per row
-        rows += [group_btns[i:i + 2] for i in range(0, len(group_btns), 2)]
-
-    if not any_model:
-        rows.append([InlineKeyboardButton(text="— В этой категории нет моделей —", callback_data="noop")])
-
+    rows.append([InlineKeyboardButton(
+        text="← Все семейства",
+        callback_data="mfamily:root",
+    )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2919,8 +3115,6 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [_btn("Цена фото", "admin:imgprice", emoji_id=EMOJI_IMAGE_ID),
          _btn("Цена видео", "admin:videoprice", emoji_id=EMOJI_VIDEO_ID)],
         [_btn("Фото блоков", "admin:media", emoji_id=EMOJI_IMAGE_ID)],
-        [_btn("Управление кейсами", "admin:cases", emoji_id=EMOJI_GIFT_ID),
-         _btn("📣 Канал кейсов", "admin:case_channel")],
         [_btn(test_label, "admin:testmode", test_style)],
         [_btn(maint_label, "admin:maintenance", maint_style)],
     ])
@@ -2981,39 +3175,58 @@ def admin_media_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_models_keyboard() -> InlineKeyboardMarkup:
-    """Group model controls by provider and show status plus current price."""
-    provider_groups = [
-        ("groq", "⚡ GROQ"),
-        ("seekai", "🧭 SEEKAI"),
-        ("sambanova", "🔥 SAMBANOVA"),
-        ("openrouter", "🌐 OPENROUTER"),
-        ("mistral", "🇫🇷 MISTRAL"),
-        ("anymodel", "🧠 ANYMODEL"),
-    ]
+def admin_models_keyboard(family_key: str | None = None) -> InlineKeyboardMarkup:
+    """Show model controls by model family, not by API provider."""
+    restrictions, prices = get_model_catalog_state()
     rows: list[list[InlineKeyboardButton]] = [[InlineKeyboardButton(
         text="🟢 доступна · ⏳ временно · 🔴 отключена",
         callback_data="noop",
     )]]
-    for provider_key, provider_label in provider_groups:
+    families = group_models_by_family(MODELS.items())
+    if family_key not in MODEL_FAMILY_INFO:
+        family_key = None
+
+    if family_key is None:
+        family_buttons = []
+        for key, label, emoji, family_models in families:
+            button = InlineKeyboardButton(
+                text=f"{emoji} {label} · {len(family_models)}",
+                callback_data=f"mctrl:family:{key}",
+            )
+            button.style = "primary"
+            family_buttons.append(button)
+        rows += [
+            family_buttons[index:index + 2]
+            for index in range(0, len(family_buttons), 2)
+        ]
+    else:
+        family_models = next(
+            (models for key, _label, _emoji, models in families if key == family_key),
+            [],
+        )
         group_buttons = []
-        for key, model in MODELS.items():
-            if model.get("provider", "groq") != provider_key:
-                continue
-            restriction = get_model_restriction(key)
-            status = "⏳" if restriction and restriction["type"] == "temporary" else (
+        for key, model in family_models:
+            restriction = restrictions.get(key)
+            status = "⏳" if restriction and restriction.get("type") == "temporary" else (
                 "🔴" if restriction else "🟢"
             )
-            price = get_model_price(key)
+            try:
+                price = int(prices.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                price = 0
             price_label = "🆓" if price == 0 else f"{price}"
-            group_buttons.append(InlineKeyboardButton(
+            button = InlineKeyboardButton(
                 text=f"{status} {model.get('button_name', model['name'])} · {price_label}",
                 callback_data=f"mctrl:info:{key}",
-                icon_custom_emoji_id=get_model_emoji_id(key),
-            ))
-        if group_buttons:
-            rows.append([InlineKeyboardButton(text=f"━━ {provider_label} ━━", callback_data="noop")])
-            rows += [group_buttons[i:i + 2] for i in range(0, len(group_buttons), 2)]
+                icon_custom_emoji_id=get_model_emoji_id(key, restrictions),
+            )
+            button.style = "primary"
+            group_buttons.append(button)
+        rows += [group_buttons[i:i + 2] for i in range(0, len(group_buttons), 2)]
+        rows.append([InlineKeyboardButton(
+            text="← Все семейства",
+            callback_data="mctrl:families",
+        )])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3057,19 +3270,19 @@ def styles_keyboard(current: str) -> InlineKeyboardMarkup:
 
 
 def start_inline_keyboard() -> InlineKeyboardMarkup:
+    btn_model = InlineKeyboardButton(
+        text="Выбрать модель",
+        callback_data="open:model",
+        icon_custom_emoji_id=EMOJI_ROBOT_ID,
+    )
+    btn_model.style = "success"
     btn_style = InlineKeyboardButton(
         text="Стиль общения",
         callback_data="style:menu",
         icon_custom_emoji_id=EMOJI_SPEECH_ID,
     )
     btn_style.style = "primary"
-    btn_cases = InlineKeyboardButton(
-        text="Кейсы",
-        callback_data="cases:list",
-        icon_custom_emoji_id=EMOJI_GIFT_ID,
-    )
-    btn_cases.style = "success"
-    return InlineKeyboardMarkup(inline_keyboard=[[btn_style, btn_cases]])
+    return InlineKeyboardMarkup(inline_keyboard=[[btn_model, btn_style]])
 
 
 # ─── Router ───────────────────────────────────────────────────────────────────
@@ -3087,19 +3300,22 @@ async def cmd_start(message: Message):
     model = MODELS[session["model"]]
     role = ROLES[session["role"]]
     style = STYLES[session["style"]]
+    first_name = html_escape(user.first_name or "друг")
     caption = (
-        f"{PE_WAVE} Добро пожаловать, <b>{user.first_name}</b>!\n\n"
-        f"Это <b>Zeno AI</b> — умный помощник для идей, ответов и задач на каждый день.\n\n"
-        f"{PE_CHAT} Задавай вопросы и веди диалог с учётом истории\n"
-        f"{PE_SEARCH} Ищи актуальную информацию в интернете\n"
-        f"{PE_SPARKLES} Создавай изображения и работай с фотографиями\n"
-        f"{PE_ROLE} Выбирай роль и стиль общения под себя\n\n"
-        f"{PE_ROCKET} <b>Начать просто:</b> напиши сообщение ниже или выбери нужный раздел в меню.\n\n"
-        f"{PE_PIN} <b>Твои текущие настройки:</b>\n"
-        f"• Модель: {model['emoji_html']} {model['name']}\n"
-        f"• Роль: {role['emoji_html']} {role['name']}\n"
-        f"• Стиль: {style['emoji']} {style['name']}\n\n"
-        f"{PE_IDEA} Можно начать с команды: <b>«Помоги мне с…»</b>"
+        f"{PE_WAVE} <b>ZENO AI</b>  ·  твой умный помощник\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"Привет, <b>{first_name}</b>!\n"
+        "Идеи, ответы и задачи — в одном диалоге, "
+        "с памятью контекста и выбором подходящей модели.\n\n"
+        f"{PE_CHAT} Общайся и разбирай сложные вопросы\n"
+        f"{PE_SEARCH} Ищи свежую информацию в интернете\n"
+        f"{PE_SPARKLES} Создавай изображения и анализируй фото\n\n"
+        f"{PE_ROCKET} <b>Быстрый старт</b>\n"
+        "Напиши сообщение или выбери модель и стиль ниже.\n\n"
+        f"{PE_PIN} <b>Твои настройки</b>\n"
+        f"Модель · {model['emoji_html']} <b>{model['name']}</b>\n"
+        f"Роль · {role['emoji_html']} <b>{role['name']}</b>\n"
+        f"Стиль · {style['emoji']} <b>{style['name']}</b>"
     )
     photo = get_media_file_id("main_menu") or FSInputFile(DEFAULT_MAIN_IMAGE)
     await message.answer_photo(
@@ -3120,7 +3336,7 @@ async def cmd_start(message: Message):
 @router.message(Command("help"))
 @router.message(F.text == "ℹ️ Помощь")
 async def cmd_help(message: Message):
-    models_text = "Список моделей и выбор доступны в меню «Модель» или по команде /model."
+    models_text = "Список моделей и выбор доступны в меню «Модели» или по команде /model."
     roles_text = "\n".join(
         f"• {r['emoji_html']} <b>{r['name']}</b>" for r in ROLES.values()
     )
@@ -3132,10 +3348,9 @@ async def cmd_help(message: Message):
         f"{PE_SETTINGS} <b>Настройки</b> — регулировка температуры ответа\n"
         f"{PE_TRASH} <b>Новый диалог</b> — сбросить историю\n"
         f"{PE_SPARKLES} <b>Генерация</b> — бесплатные видео и фото по описанию\n"
-        f"{PE_SEARCH} <b>Найди в интернете</b> — поиск актуальной информации\n"
+        f"{PE_SEARCH} <b>Поиск в интернете</b> — поиск актуальной информации\n"
         "👁 <b>Анализ фото</b> — отправь фото и я его опишу\n"
-        f"{PE_USER} <b>Профиль</b> — ваш профиль и баланс ZenoToken\n"
-        f"{PE_GIFT} <b>Кейсы</b> — открывай кейсы и выигрывай призы\n\n"
+        f"{PE_USER} <b>Профиль</b> — ваш профиль и баланс ZenoToken\n\n"
         "📝 <b>Команды:</b>\n"
         "/start — главное меню\n"
         "/new — новый диалог\n"
@@ -3171,11 +3386,13 @@ async def cmd_help(message: Message):
 
 @router.message(Command("model"))
 @router.message(F.text == "Модель")
+@router.message(F.text == "Модели")
 @router.message(F.text == "🤖 Модель")
 async def cmd_model(message: Message):
     session = get_session(message.from_user.id)
+    session["model_family"] = None
     filter_mode = session.get("models_filter", "all")
-    text = f"{PE_ROBOT} <b>Выберите модель ИИ:</b>"
+    text = models_screen_text(session["model"])
     keyboard = models_keyboard(session["model"], filter_mode)
     if not await send_configured_photo(message, "models", text, keyboard):
         await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
@@ -3497,7 +3714,23 @@ async def cb_admin_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменено")
 
 
-# ─── Admin: case notification channel ────────────────────────────────────────
+# ─── Retired case callbacks ────────────────────────────────────────────────────
+
+@router.callback_query(
+    (F.data == "cases:list")
+    | (F.data == "admin:cases")
+    | (F.data == "admin:prizes")
+    | (F.data.startswith("cases:"))
+    | (F.data.startswith("case:"))
+    | (F.data.startswith("acase:"))
+    | (F.data.startswith("aprize:"))
+    | (F.data.startswith("admin:case_"))
+)
+async def cb_cases_removed(callback: CallbackQuery):
+    await callback.answer("Раздел кейсов отключён.", show_alert=True)
+
+
+# ─── Legacy case settings (kept only for old stored data) ─────────────────────
 
 @router.callback_query(F.data == "admin:case_channel")
 async def cb_admin_case_channel(callback: CallbackQuery):
@@ -3647,31 +3880,46 @@ async def fsm_admin_media_photo_invalid(message: Message):
 
 # ─── Admin: Price management ──────────────────────────────────────────────────
 
-def admin_prices_keyboard() -> InlineKeyboardMarkup:
-    provider_groups = [
-        ("groq", "⚡ GROQ"),
-        ("seekai", "🧭 SEEKAI"),
-        ("sambanova", "🔥 SAMBANOVA"),
-        ("openrouter", "🌐 OPENROUTER"),
-        ("mistral", "🇫🇷 MISTRAL"),
-        ("anymodel", "🧠 ANYMODEL"),
-    ]
+def admin_prices_keyboard(family_key: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for provider_key, provider_label in provider_groups:
-        group_buttons = []
-        for key, model in MODELS.items():
-            if model.get("provider", "groq") != provider_key:
-                continue
-            price = get_model_price(key)
+    families = group_models_by_family(MODELS.items())
+    if family_key not in MODEL_FAMILY_INFO:
+        family_key = None
+
+    if family_key is None:
+        family_buttons = []
+        for key, label, emoji, family_models in families:
+            button = InlineKeyboardButton(
+                text=f"{emoji} {label} · {len(family_models)}",
+                callback_data=f"aprice:family:{key}",
+            )
+            button.style = "primary"
+            family_buttons.append(button)
+        rows += [
+            family_buttons[index:index + 2]
+            for index in range(0, len(family_buttons), 2)
+        ]
+    else:
+        family_models = next(
+            (models for key, _label, _emoji, models in families if key == family_key),
+            [],
+        )
+        _restrictions, prices = get_model_catalog_state()
+        for key, model in family_models:
+            try:
+                price = int(prices.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                price = 0
             price_label = "Бесплатно" if price == 0 else f"{price} ZenoToken"
-            group_buttons.append(InlineKeyboardButton(
+            rows.append([InlineKeyboardButton(
                 text=f"{model.get('button_name', model['name'])} — {price_label}",
                 callback_data=f"aprice:pick:{key}",
                 icon_custom_emoji_id=model["emoji_id"],
-            ))
-        if group_buttons:
-            rows.append([InlineKeyboardButton(text=f"━━ {provider_label} ━━", callback_data="noop")])
-            rows += [[button] for button in group_buttons]
+            )])
+        rows.append([InlineKeyboardButton(
+            text="← Все семейства",
+            callback_data="aprice:families",
+        )])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3683,10 +3931,43 @@ async def cb_admin_prices(callback: CallbackQuery):
         return
     await callback.message.edit_text(
         "💰 <b>Цена за запрос</b>\n\n"
-        "Нажмите на модель, чтобы изменить стоимость одного запроса в ZenoToken.\n"
+        "Выберите семейство, затем модель для изменения стоимости в ZenoToken.\n"
         "<i>0 = бесплатная модель</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_prices_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("aprice:family:"))
+async def cb_aprice_family(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    family_key = callback.data.split(":", 2)[2]
+    family_info = MODEL_FAMILY_INFO.get(family_key)
+    if not family_info:
+        await callback.answer("Семейство моделей не найдено.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"💰 <b>Цены · {family_info[1]} {family_info[0]}</b>\n\n"
+        "Выберите модель, чтобы изменить стоимость запроса.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_prices_keyboard(family_key),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "aprice:families")
+async def cb_aprice_families(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "💰 <b>Цена за запрос</b>\n\n"
+        "Выберите семейство моделей, затем нужную модель.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_prices_keyboard(),
     )
     await callback.answer()
 
@@ -3939,9 +4220,42 @@ async def cb_admin_models(callback: CallbackQuery):
     await callback.message.edit_text(
         f"{PE_ROBOT} <b>Управление моделями</b>\n\n"
         "🟢 — доступна  |  🔴 — отключена  |  ⏳ — временно отключена\n\n"
-        "Выберите модель для управления:",
+        "Выберите семейство моделей:",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_models_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mctrl:families")
+async def cb_mctrl_families(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"{PE_ROBOT} <b>Управление моделями</b>\n\n"
+        "Выберите семейство, чтобы увидеть модели и их статус.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_models_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mctrl:family:"))
+async def cb_mctrl_family(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    family_key = callback.data.split(":", 2)[2]
+    family_info = MODEL_FAMILY_INFO.get(family_key)
+    if not family_info:
+        await callback.answer("Семейство моделей не найдено.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"{family_info[1]} <b>{family_info[0]}</b>\n\n"
+        "Выберите модель для управления:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_models_keyboard(family_key),
     )
     await callback.answer()
 
@@ -4490,18 +4804,53 @@ async def cb_style(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mfilter:"))
 async def cb_mfilter(callback: CallbackQuery):
-    filter_mode = callback.data.split(":")[1]
+    parts = callback.data.split(":", 2)
+    filter_mode = parts[1] if len(parts) > 1 else "all"
+    family_key = parts[2] if len(parts) > 2 and parts[2] != "root" else None
     session = get_session(callback.from_user.id)
     session["models_filter"] = filter_mode
-    await callback.message.edit_reply_markup(
-        reply_markup=models_keyboard(session["model"], filter_mode)
-    )
+    session["model_family"] = family_key
+    try:
+        await edit_models_message(
+            callback,
+            models_screen_text(session["model"], family_key),
+            models_keyboard(session["model"], filter_mode, family_key),
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mfamily:"))
+async def cb_mfamily(callback: CallbackQuery):
+    family_key = callback.data.split(":", 1)[1]
+    session = get_session(callback.from_user.id)
+    family_key = None if family_key == "root" else family_key
+    if family_key is not None and family_key not in MODEL_FAMILY_INFO:
+        await callback.answer("Семейство моделей не найдено.", show_alert=True)
+        return
+    session["model_family"] = family_key
+    try:
+        await edit_models_message(
+            callback,
+            models_screen_text(session["model"], family_key),
+            models_keyboard(
+                session["model"],
+                session.get("models_filter", "all"),
+                family_key,
+            ),
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("model:"))
 async def cb_model(callback: CallbackQuery):
     model_key = callback.data.split(":")[1]
+    if model_key not in MODELS:
+        await callback.answer("Модель не найдена. Откройте каталог заново.", show_alert=True)
+        return
     model = MODELS[model_key]
 
     if model.get("disabled"):
@@ -4513,39 +4862,49 @@ async def cb_model(callback: CallbackQuery):
 
     if not is_model_available(model):
         await callback.answer(
-            "Эта модель временно скрыта: для её провайдера не настроен API-ключ.",
+            "Эта модель пока недоступна: для неё не настроен API-ключ.",
             show_alert=True,
         )
         return
 
+    catalog_state = get_model_catalog_state()
+    restrictions, prices = catalog_state
+
     # Check if model is restricted (admin can always select any model, unless in test mode)
     if not is_admin(callback.from_user.id):
-        r = get_model_restriction(model_key)
+        r = restrictions.get(model_key)
         if r:
-            if r["type"] == "temporary":
-                until_str = datetime.fromtimestamp(r["until"]).strftime("%d.%m.%Y %H:%M")
+            if r.get("type") == "temporary":
+                until_str = datetime.fromtimestamp(
+                    float(r.get("until") or 0)
+                ).strftime("%d.%m.%Y %H:%M")
                 notice = f"⏳ Временно недоступна до <b>{until_str}</b>"
             else:
                 notice = "🔴 Модель недоступна"
             await callback.answer(
-                f"❌ {model.get('button_name', model['name'])} недоступна\n\nПричина: {r['reason']}",
+                f"❌ {model.get('button_name', model['name'])} недоступна\n\n"
+                f"Причина: {r.get('reason', 'ограничена администратором')}",
                 show_alert=True
             )
             return
 
     session = get_session(callback.from_user.id)
     session["model"] = model_key
+    family_key = get_model_family_key(model)
+    session["model_family"] = family_key
     filter_mode = session.get("models_filter", "all")
 
-    price = get_model_price(model_key)
+    try:
+        price = int(prices.get(model_key, 0) or 0)
+    except (TypeError, ValueError):
+        price = 0
     price_line = f"\n\n{PE_COIN} <b>Стоимость запроса: {price} ZenoToken</b>" if price > 0 else ""
 
     try:
-        await callback.message.edit_text(
-            f"{pe('5370893703575511656', '✅')} Модель: {model['emoji_html']} <b>{model['name']}</b>\n\n"
-            f"<i>{model['description']}</i>{price_line}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=models_keyboard(model_key, filter_mode)
+        await edit_models_message(
+            callback,
+            f"{models_screen_text(model_key, family_key)}{price_line}",
+            models_keyboard(model_key, filter_mode, family_key, catalog_state),
         )
     except TelegramBadRequest:
         pass
@@ -4593,9 +4952,10 @@ async def cb_noop(callback: CallbackQuery):
 @router.callback_query(F.data == "open:model")
 async def cb_open_model(callback: CallbackQuery):
     session = get_session(callback.from_user.id)
+    session["model_family"] = None
     filter_mode = session.get("models_filter", "all")
     await callback.message.answer(
-        f"{PE_ROBOT} <b>Выберите модель ИИ:</b>",
+        models_screen_text(session["model"]),
         parse_mode=ParseMode.HTML,
         reply_markup=models_keyboard(session["model"], filter_mode)
     )
@@ -6597,6 +6957,7 @@ async def cmd_deep_search(message: Message, state: FSMContext):
 
 @router.message(F.text == "🔎 Найди в интернете")
 @router.message(F.text == "Найди в интернете")
+@router.message(F.text == "Поиск в интернете")
 async def search_button(message: Message, state: FSMContext):
     await start_search(message, state)
 
