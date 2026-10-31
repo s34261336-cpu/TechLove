@@ -754,6 +754,17 @@ def draft_preview_text(text: str, parse_mode: ParseMode | str | None) -> str:
     return preview[:4096]
 
 
+def ai_stream_preview_text(text: str) -> str:
+    """Hide reasoning blocks and Markdown syntax from partial Telegram drafts."""
+    visible_text = re.sub(
+        r"<think\b[^>]*>.*?(?:</think>|$)",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return draft_preview_text(visible_text, ParseMode.MARKDOWN)
+
+
 async def send_message_draft_preview(
     message: Message,
     text: str,
@@ -796,10 +807,12 @@ async def send_message_draft_preview(
 async def answer_and_track(
     message: Message,
     text: str,
+    show_draft_preview: bool = True,
     **kwargs,
 ) -> Message:
     """Send a text reply and index it for later reply-based saving."""
-    await send_message_draft_preview(message, text, kwargs.get("parse_mode"))
+    if show_draft_preview:
+        await send_message_draft_preview(message, text, kwargs.get("parse_mode"))
     sent = await message.answer(text, **kwargs)
     if sent.text:
         # Put the source in the in-process cache before yielding again. This
@@ -2609,6 +2622,14 @@ def get_session(user_id: int) -> dict:
         if old_model in MODEL_ALIASES:
             user_sessions[user_id]["model"] = MODEL_ALIASES[old_model]
         elif (
+            old_model in MODELS
+            and MODELS[old_model].get("provider") == "anymodel"
+            and MODELS[old_model].get("model_id") == "am/diffusiongemma-26b-a4b-it"
+        ):
+            # Move sessions off the previous lowest-cost default, which was slow
+            # to answer, while leaving other user-selected models unchanged.
+            user_sessions[user_id]["model"] = get_default_model_key()
+        elif (
             user_sessions[user_id].get("model") not in MODELS
             or not is_model_available(MODELS[user_sessions[user_id]["model"]])
         ):
@@ -2619,7 +2640,45 @@ def get_session(user_id: int) -> dict:
 
 
 def get_default_model_key() -> str:
-    """Prefer the lowest-cost listed AnyModel model, then Groq and other providers."""
+    """Prefer the verified fast AnyModel route, then other speed-labeled models."""
+    preferred_fast_ids = (
+        "ag/gemini-2.5-flash-lite",
+        "ag/gemini-3.1-flash-lite-preview",
+        "gc/gemini-2.5-flash-lite",
+        "gc/gemini-3.1-flash-lite-preview",
+    )
+    anymodel_by_id = {
+        str(model.get("model_id") or "").casefold(): model_key
+        for model_key, model in MODELS.items()
+        if model.get("provider") == "anymodel" and is_model_available(model)
+    }
+    for preferred_id in preferred_fast_ids:
+        model_key = anymodel_by_id.get(preferred_id)
+        if model_key:
+            return model_key
+
+    fast_hints = (
+        "flash-lite",
+        "flash",
+        "turbo",
+        "fast",
+        "instant",
+        "lite",
+        "mini",
+        "haiku",
+        "nano",
+    )
+    # The tested Lightning route used its short output budget on reasoning.
+    slow_hints = (
+        "reasoning",
+        "reasoner",
+        "lightning",
+        "omni",
+        "pro",
+        "ultra",
+        "opus",
+        "deep-research",
+    )
     anymodel_options = []
     for model_key, model in MODELS.items():
         if model.get("provider") != "anymodel" or not is_model_available(model):
@@ -2630,11 +2689,19 @@ def get_default_model_key() -> str:
                 total_coefficient = (
                     float(coefficients["input"]) + float(coefficients["output"])
                 )
-                anymodel_options.append((total_coefficient, model_key))
+                model_id = str(model.get("model_id") or "").casefold()
+                fast_rank = next(
+                    (index for index, hint in enumerate(fast_hints) if hint in model_id),
+                    len(fast_hints),
+                )
+                slow_penalty = int(any(hint in model_id for hint in slow_hints))
+                anymodel_options.append(
+                    (slow_penalty, fast_rank, total_coefficient, model_key)
+                )
             except (KeyError, TypeError, ValueError):
                 continue
     if anymodel_options:
-        return min(anymodel_options)[1]
+        return min(anymodel_options)[3]
     preferred = "gpt_oss_120b"
     if preferred in MODELS and is_model_available(MODELS[preferred]):
         return preferred
@@ -5380,7 +5447,12 @@ def provider_error_text(provider: str, status: int, data: Any, raw_body: str = "
     return f"{provider_label(provider)} вернул HTTP {status}: {details}"
 
 
-async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | None = None) -> str:
+async def _call_ai_unlocked(
+    session: dict,
+    user_message: str,
+    user_id: int | None = None,
+    on_delta=None,
+) -> str:
     model_cfg = MODELS[session["model"]]
     model_id = model_cfg["model_id"]
 
@@ -5422,6 +5494,9 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
     if model_cfg.get("no_thinking"):
         payload["thinking"] = {"type": "disabled"}
     provider = model_cfg.get("provider", "groq")
+    stream_anymodel = provider == "anymodel" and on_delta is not None
+    if stream_anymodel:
+        payload["stream"] = True
     if provider == "seekai":
         api_url = SEEKAI_API_URL
         api_key = SEEKAI_API_KEY
@@ -5465,11 +5540,62 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=90, connect=10, sock_read=80),
             ) as resp:
-                raw_body = await resp.text()
-                try:
-                    data = json.loads(raw_body) if raw_body else {}
-                except json.JSONDecodeError:
-                    data = {}
+                raw_body = ""
+                data = {}
+                streamed_reply = None
+                content_type = resp.headers.get("Content-Type", "").casefold()
+                if (
+                    stream_anymodel
+                    and resp.status == 200
+                    and "text/event-stream" in content_type
+                ):
+                    streamed_parts = []
+                    async for raw_line in resp.content:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        event_data = line.partition(":")[2].strip()
+                        if not event_data or event_data == "[DONE]":
+                            if event_data == "[DONE]":
+                                break
+                            continue
+                        try:
+                            event = json.loads(event_data)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        if event.get("error"):
+                            data = event
+                            continue
+                        choices = event.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            continue
+                        choice = choices[0] if isinstance(choices[0], dict) else {}
+                        delta = choice.get("delta")
+                        delta = delta if isinstance(delta, dict) else {}
+                        content = delta.get("content")
+                        if isinstance(content, str):
+                            delta_text = content
+                        elif isinstance(content, list):
+                            delta_text = "".join(
+                                part if isinstance(part, str) else
+                                str(part.get("text") or part.get("content") or "")
+                                for part in content
+                                if isinstance(part, (str, dict))
+                            )
+                        else:
+                            delta_text = ""
+                        if delta_text:
+                            streamed_parts.append(delta_text)
+                            await on_delta(delta_text)
+                    streamed_reply = "".join(streamed_parts)
+                else:
+                    raw_body = await resp.text()
+                    try:
+                        data = json.loads(raw_body) if raw_body else {}
+                    except json.JSONDecodeError:
+                        data = {}
 
         error_text = provider_error_text(provider, resp.status, data, raw_body)
         error_lower = error_text.casefold()
@@ -5496,7 +5622,13 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
         if isinstance(data, dict) and data.get("error"):
             raise ValueError(error_text)
 
-        reply = extract_ai_reply(data)
+        reply = (
+            streamed_reply
+            if streamed_reply is not None
+            else extract_ai_reply(data)
+        )
+        if stream_anymodel and streamed_reply is None and reply:
+            await on_delta(reply)
         if not reply:
             raise ValueError(
                 f"{provider_name} не вернул текстовый ответ. "
@@ -5531,12 +5663,17 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
         raise
 
 
-async def call_ai(session: dict, user_message: str, user_id: int | None = None) -> str:
+async def call_ai(
+    session: dict,
+    user_message: str,
+    user_id: int | None = None,
+    on_delta=None,
+) -> str:
     """Run one user's AI conversation at a time to prevent history races."""
     if user_id is None:
-        return await _call_ai_unlocked(session, user_message, user_id)
+        return await _call_ai_unlocked(session, user_message, user_id, on_delta)
     async with get_user_ai_lock(user_id):
-        return await _call_ai_unlocked(session, user_message, user_id)
+        return await _call_ai_unlocked(session, user_message, user_id, on_delta)
 
 
 def strip_tg_emoji(text: str) -> str:
@@ -6894,6 +7031,55 @@ async def process_text_message(message: Message, text: str):
         parse_mode=ParseMode.HTML
     )
 
+    streamed_text = ""
+    streamed_preview_sent = False
+    stream_preview_disabled = False
+    last_preview_at = 0.0
+    last_preview_size = 0
+    stream_draft_id = next(_MESSAGE_DRAFT_IDS)
+
+    async def on_ai_delta(delta: str) -> None:
+        nonlocal streamed_text, streamed_preview_sent
+        nonlocal stream_preview_disabled, last_preview_at, last_preview_size
+        if not delta:
+            return
+        streamed_text += delta
+        if stream_preview_disabled:
+            return
+        preview = ai_stream_preview_text(streamed_text)
+        if not preview:
+            return
+        now = asyncio.get_running_loop().time()
+        if (
+            streamed_preview_sent
+            and now - last_preview_at < 0.7
+            and len(preview) - last_preview_size < 80
+        ):
+            return
+        try:
+            if message.chat.type == ChatType.PRIVATE:
+                await message.bot.send_message_draft(
+                    chat_id=message.chat.id,
+                    draft_id=stream_draft_id,
+                    text=preview,
+                )
+            else:
+                await thinking_msg.edit_text(preview, parse_mode=None)
+            streamed_preview_sent = True
+            last_preview_at = now
+            last_preview_size = len(preview)
+        except Exception as exc:
+            stream_preview_disabled = True
+            logger.debug(
+                "Streaming preview unavailable for chat %s: %s",
+                message.chat.id,
+                exc,
+            )
+
+    stream_callback = (
+        on_ai_delta if model.get("provider") == "anymodel" else None
+    )
+
     # Keep "typing..." indicator alive for the full duration of the AI call
     typing_active = True
 
@@ -6908,7 +7094,12 @@ async def process_text_message(message: Message, text: str):
     typing_task = asyncio.create_task(keep_typing())
 
     try:
-        reply = await call_ai(session, text, user_id)
+        reply = await call_ai(
+            session,
+            text,
+            user_id,
+            on_delta=stream_callback,
+        )
         if SUPABASE_FACTS_URL and SUPABASE_KEY:
             asyncio.create_task(persist_user_facts(user_id, text))
         if SUPABASE_SESSIONS_URL and SUPABASE_KEY:
@@ -6926,10 +7117,15 @@ async def process_text_message(message: Message, text: str):
                     message,
                     chunk,
                     parse_mode=ParseMode.MARKDOWN,
+                    show_draft_preview=not streamed_preview_sent,
                 )
             except Exception:
                 # Fallback: send as plain text if Markdown parsing fails
-                await answer_and_track(message, chunk)
+                await answer_and_track(
+                    message,
+                    chunk,
+                    show_draft_preview=not streamed_preview_sent,
+                )
 
     except RateLimitError as e:
         logger.warning(f"Rate limit for user {user_id}: {e}")
@@ -6941,13 +7137,23 @@ async def process_text_message(message: Message, text: str):
                 user_id,
                 refunded_balance,
             )
-        await thinking_msg.edit_text(
+        error_message = (
             f"⏳ <b>Модель {html_escape(e.model_name)} временно перегружена.</b>\n\n"
             f"Провайдер {html_escape(e.provider_name or 'модели')} "
             "не успел обработать запрос. Подождите немного или выберите другую модель.\n\n"
-            f"{PE_ROBOT} /model — сменить модель",
-            parse_mode=ParseMode.HTML
+            f"{PE_ROBOT} /model — сменить модель"
         )
+        if streamed_preview_sent and message.chat.type == ChatType.PRIVATE:
+            try:
+                await thinking_msg.delete()
+            except TelegramBadRequest:
+                pass
+            await message.answer(error_message, parse_mode=ParseMode.HTML)
+        else:
+            await thinking_msg.edit_text(
+                error_message,
+                parse_mode=ParseMode.HTML,
+            )
     except Exception as e:
         logger.error(f"AI error for user {user_id}: {e}")
         if token_charged:
@@ -6959,10 +7165,21 @@ async def process_text_message(message: Message, text: str):
                 refunded_balance,
             )
         err = html_escape(str(e)[:300])
-        await thinking_msg.edit_text(
-            f"❌ <b>Ошибка:</b> <code>{err}</code>\n\nПопробуйте:\n• Сменить модель /model\n• Новый диалог /new",
-            parse_mode=ParseMode.HTML
+        error_message = (
+            f"❌ <b>Ошибка:</b> <code>{err}</code>\n\n"
+            "Попробуйте:\n• Сменить модель /model\n• Новый диалог /new"
         )
+        if streamed_preview_sent and message.chat.type == ChatType.PRIVATE:
+            try:
+                await thinking_msg.delete()
+            except TelegramBadRequest:
+                pass
+            await message.answer(error_message, parse_mode=ParseMode.HTML)
+        else:
+            await thinking_msg.edit_text(
+                error_message,
+                parse_mode=ParseMode.HTML,
+            )
     finally:
         typing_active = False
         typing_task.cancel()
