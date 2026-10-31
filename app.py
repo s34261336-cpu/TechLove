@@ -2908,6 +2908,7 @@ def models_keyboard(
     if family_key not in MODEL_FAMILY_INFO:
         family_key = None
 
+    filter_styles = {"all": "primary", "free": "success", "paid": "danger"}
     filter_row = []
     for key, label in [
         ("all", "Все"),
@@ -2918,7 +2919,7 @@ def models_keyboard(
             text=f"✓ {label}" if filter_mode == key else label,
             callback_data=f"mfilter:{key}:{family_key or 'root'}",
         )
-        button.style = "primary"
+        button.style = filter_styles[key]
         filter_row.append(button)
 
     _restrictions, prices = (
@@ -2941,7 +2942,7 @@ def models_keyboard(
                 text=f"{'✓ ' if key == selected_family else ''}{label} · {len(models)}",
                 callback_data=f"mfamily:{key}",
             )
-            button.style = "primary"
+            button.style = "success" if key == selected_family else "primary"
             family_buttons.append(button)
         rows.extend(
             family_buttons[index:index + 2]
@@ -2980,7 +2981,7 @@ def models_keyboard(
             text=f"{check}{model_picker_label(model_key, model, family_models)}{price_tag}",
             callback_data=f"model:{model_key}",
         )
-        button.style = "primary"
+        button.style = "success" if price == 0 else "primary"
         model_buttons.append(button)
 
     rows.extend(
@@ -3161,7 +3162,11 @@ def admin_models_keyboard(family_key: str | None = None) -> InlineKeyboardMarkup
                 text=f"{status} · {model.get('button_name', model['name'])} · {price_label}",
                 callback_data=f"mctrl:info:{key}",
             )
-            button.style = "primary"
+            button.style = (
+                "danger" if restriction
+                else "success" if price == 0
+                else "primary"
+            )
             group_buttons.append(button)
         rows += [group_buttons[i:i + 2] for i in range(0, len(group_buttons), 2)]
         rows.append([InlineKeyboardButton(
@@ -3851,10 +3856,12 @@ def admin_prices_keyboard(family_key: str | None = None) -> InlineKeyboardMarkup
             except (TypeError, ValueError):
                 price = 0
             price_label = "Бесплатно" if price == 0 else f"{price} ZenoToken"
-            rows.append([InlineKeyboardButton(
+            button = InlineKeyboardButton(
                 text=f"{model.get('button_name', model['name'])} — {price_label}",
                 callback_data=f"aprice:pick:{key}",
-            )])
+            )
+            button.style = "success" if price == 0 else "primary"
+            rows.append([button])
         rows.append([InlineKeyboardButton(
             text="‹ Все семейства",
             callback_data="aprice:families",
