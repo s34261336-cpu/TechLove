@@ -124,8 +124,10 @@ BAI_API_KEY = os.environ.get("BAI_API_KEY", "")
 BAI_API_URL = "https://api.b.ai/v1/chat/completions"
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
-RADOXAI_API_KEY = os.environ.get("RADOXAI_API_KEY", "")
-RADOXAI_CHAT_URL = "https://radoxai.com/v1/chat/completions"
+ANYMODEL_API_KEY = os.environ.get("ANYMODEL_API_KEY", "")
+ANYMODEL_BASE_URL = "https://anymodel.org/v1"
+ANYMODEL_MODELS_URL = f"{ANYMODEL_BASE_URL}/models"
+ANYMODEL_CHAT_URL = f"{ANYMODEL_BASE_URL}/chat/completions"
 
 # Local speech-to-text settings. The model is downloaded only on the first
 # voice message and then reused for the lifetime of the bot process.
@@ -1384,55 +1386,104 @@ MODELS = {
 }
 
 
-def load_radoxai_models() -> int:
-    """Register the provider's current public chat catalog from the local file."""
-    try:
-        catalog_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "radoxai_catalog.json",
-        )
-        with open(catalog_path, "r", encoding="utf-8") as catalog_file:
-            entries = json.load(catalog_file)
-    except (OSError, json.JSONDecodeError) as error:
-        logger.warning("Could not load the RadoxAI catalog (%s).", type(error).__name__)
-        return 0
-
-    if not isinstance(entries, list):
-        logger.warning("RadoxAI catalog must contain a list of models.")
-        return 0
-
+def register_anymodel_models(entries: list) -> int:
+    """Register only text-chat models, preserving AnyModel's exact model IDs."""
     loaded_keys = set()
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         model_id = str(entry.get("id") or "").strip()
-        if not model_id:
+        # AnyModel's text models omit `kind`; other kinds use image/audio/video APIs.
+        if not model_id or entry.get("kind"):
             continue
 
         slug = re.sub(r"[^a-zA-Z0-9]+", "_", model_id).strip("_").lower()
         model_hash = hashlib.sha256(model_id.encode("utf-8")).hexdigest()[:8]
-        model_key = f"rdx_{slug[:30]}_{model_hash}"
+        model_key = f"am_{slug[:28]}_{model_hash}"
         if model_key in loaded_keys:
             continue
 
-        display_name = str(entry.get("name") or model_id).strip()[:42]
-        description = str(
-            entry.get("description") or "Модель из каталога RadoxAI."
-        ).strip()[:300]
+        billing = entry.get("billing")
+        coefficients = (
+            billing.get("coefficient", {}) if isinstance(billing, dict) else {}
+        )
+        anymodel_coefficients = None
+        if entry.get("owned_by") == "combo":
+            description = (
+                "Маршрут AnyModel из нескольких моделей; расход зависит "
+                "от модели, которая ответит."
+            )
+        elif isinstance(coefficients, dict):
+            try:
+                input_coefficient = float(coefficients["input"])
+                output_coefficient = float(coefficients["output"])
+                anymodel_coefficients = {
+                    "input": input_coefficient,
+                    "output": output_coefficient,
+                }
+                description = (
+                    "AnyModel: баланс-токены за токены модели — "
+                    f"вход ×{input_coefficient:g}, ответ ×{output_coefficient:g}."
+                )
+            except (KeyError, TypeError, ValueError):
+                description = "Текстовая модель AnyModel."
+        else:
+            description = "Текстовая модель AnyModel."
+
+        display_name = str(entry.get("name") or model_id).strip()
         MODELS[model_key] = {
-            "name": html_escape(display_name),
-            "button_name": display_name,
+            "name": html_escape(display_name[:64]),
+            "button_name": display_name[:42],
             "model_id": model_id,
-            "description": html_escape(description),
+            "description": html_escape(description[:300]),
             "emoji": "🧠",
             "emoji_html": PE_BRAIN,
             "emoji_id": EMOJI_BRAIN_ID,
-            "provider": "radoxai",
+            "provider": "anymodel",
+            "max_tokens": 2048,
+            "anymodel_coefficients": anymodel_coefficients,
         }
         loaded_keys.add(model_key)
 
-    logger.info("RadoxAI: загружено моделей: %d.", len(loaded_keys))
     return len(loaded_keys)
+
+
+async def load_anymodel_models() -> int:
+    """Fetch AnyModel's authenticated catalog and register text-chat models."""
+    if not ANYMODEL_API_KEY:
+        logger.info("AnyModel: API key is not configured; catalog skipped.")
+        return 0
+
+    try:
+        async with shared_http_session() as http:
+            async with http.get(
+                ANYMODEL_MODELS_URL,
+                headers={"Authorization": f"Bearer {ANYMODEL_API_KEY}"},
+                timeout=aiohttp.ClientTimeout(total=20, connect=8),
+            ) as response:
+                status = response.status
+                raw_body = await response.text()
+    except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+        logger.warning(
+            "AnyModel catalog request failed (%s).",
+            type(error).__name__,
+        )
+        return 0
+
+    try:
+        data = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        data = {}
+    if status != 200:
+        logger.warning("AnyModel catalog request failed with HTTP %d.", status)
+        return 0
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        logger.warning("AnyModel returned an unexpected catalog format.")
+        return 0
+
+    model_count = register_anymodel_models(data["data"])
+    logger.info("AnyModel: загружено текстовых моделей: %d.", model_count)
+    return model_count
 
 
 MODEL_ALIASES = {
@@ -2568,13 +2619,25 @@ def get_session(user_id: int) -> dict:
 
 
 def get_default_model_key() -> str:
-    """Prefer Groq when configured, otherwise use the first ready provider."""
+    """Prefer the lowest-cost listed AnyModel model, then Groq and other providers."""
+    anymodel_options = []
+    for model_key, model in MODELS.items():
+        if model.get("provider") != "anymodel" or not is_model_available(model):
+            continue
+        coefficients = model.get("anymodel_coefficients")
+        if isinstance(coefficients, dict):
+            try:
+                total_coefficient = (
+                    float(coefficients["input"]) + float(coefficients["output"])
+                )
+                anymodel_options.append((total_coefficient, model_key))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if anymodel_options:
+        return min(anymodel_options)[1]
     preferred = "gpt_oss_120b"
     if preferred in MODELS and is_model_available(MODELS[preferred]):
         return preferred
-    for model_key, model in MODELS.items():
-        if model.get("provider") == "radoxai" and is_model_available(model):
-            return model_key
     for model_key, model in MODELS.items():
         if is_model_available(model):
             return model_key
@@ -2644,8 +2707,8 @@ def is_model_available(model: dict) -> bool:
         return bool(BAI_API_KEY)
     if provider == "seekai":
         return bool(SEEKAI_API_KEY)
-    if provider == "radoxai":
-        return bool(RADOXAI_API_KEY)
+    if provider == "anymodel":
+        return bool(ANYMODEL_API_KEY)
     if provider == "groq":
         return bool(GROQ_API_KEY)
     return True
@@ -2676,7 +2739,7 @@ def models_keyboard(current: str, filter_mode: str = "all") -> InlineKeyboardMar
         ("sambanova",  "🔥 SAMBANOVA", None),
         ("openrouter", "🌐 OPENROUTER", None),
         ("mistral",    "🇫🇷 MISTRAL", None),
-        ("radoxai",    "🧠 RADOXAI", None),
+        ("anymodel",   "🧠 ANYMODEL", None),
     ]
 
     rows: list[list[InlineKeyboardButton]] = [
@@ -2859,7 +2922,7 @@ def admin_models_keyboard() -> InlineKeyboardMarkup:
         ("sambanova", "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
         ("mistral", "🇫🇷 MISTRAL"),
-        ("radoxai", "🧠 RADOXAI"),
+        ("anymodel", "🧠 ANYMODEL"),
     ]
     rows: list[list[InlineKeyboardButton]] = [[InlineKeyboardButton(
         text="🟢 доступна · ⏳ временно · 🔴 отключена",
@@ -3524,7 +3587,7 @@ def admin_prices_keyboard() -> InlineKeyboardMarkup:
         ("sambanova", "🔥 SAMBANOVA"),
         ("openrouter", "🌐 OPENROUTER"),
         ("mistral", "🇫🇷 MISTRAL"),
-        ("radoxai", "🧠 RADOXAI"),
+        ("anymodel", "🧠 ANYMODEL"),
     ]
     rows: list[list[InlineKeyboardButton]] = []
     for provider_key, provider_label in provider_groups:
@@ -5259,7 +5322,7 @@ def provider_label(provider: str) -> str:
         "openrouter": "OpenRouter",
         "mistral": "Mistral",
         "bai": "Bai",
-        "radoxai": "RadoxAI",
+        "anymodel": "AnyModel",
     }.get(provider, provider.upper())
 
 
@@ -5374,9 +5437,9 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
     elif provider == "mistral":
         api_url = MISTRAL_API_URL
         api_key = MISTRAL_API_KEY
-    elif provider == "radoxai":
-        api_url = RADOXAI_CHAT_URL
-        api_key = RADOXAI_API_KEY
+    elif provider == "anymodel":
+        api_url = ANYMODEL_CHAT_URL
+        api_key = ANYMODEL_API_KEY
     else:
         api_url = GROQ_API_URL
         api_key = GROQ_API_KEY
@@ -7515,7 +7578,7 @@ async def main():
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
-    radoxai_model_count = load_radoxai_models()
+    anymodel_model_count = await load_anymodel_models()
     dp = Dispatcher(storage=MemoryStorage())
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
@@ -7525,7 +7588,7 @@ async def main():
 
     try:
         await set_commands(bot)
-        logger.info("Бот запущен; моделей RadoxAI загружено: %d.", radoxai_model_count)
+        logger.info("Бот запущен; моделей AnyModel загружено: %d.", anymodel_model_count)
         await dp.start_polling(
             bot,
             allowed_updates=["message", "callback_query", "message_reaction"],
