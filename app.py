@@ -5516,6 +5516,15 @@ async def _call_ai_unlocked(session: dict, user_message: str, user_id: int | Non
             )
         session["history"].append({"role": "assistant", "content": reply})
         return reply
+    except asyncio.TimeoutError as error:
+        # Avoid an unhelpful raw timeout, and do not retry automatically because
+        # the provider may already have processed and billed the request.
+        session["history"] = history_snapshot
+        raise RateLimitError(
+            MODELS[session["model"]]["name"],
+            provider_name,
+            f"{provider_name} не ответил за отведённое время.",
+        ) from error
     except Exception:
         # Restore history to pre-call state so broken exchange doesn't poison context
         session["history"] = history_snapshot
